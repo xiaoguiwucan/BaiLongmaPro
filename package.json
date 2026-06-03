@@ -1,0 +1,152 @@
+{
+  "name": "bailongma",
+  "productName": "Bailongma",
+  "version": "0.4.92",
+  "description": "A continuously running digital consciousness framework",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "author": {
+    "name": "xiaoyuanda666-ship-it"
+  },
+  "scripts": {
+    "start": "electron .",
+    "start:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 app",
+    "start:backend": "node --env-file=.env src/index.js",
+    "start:backend:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 backend",
+    "dev": "node --env-file=.env --watch src/index.js",
+    "build": "powershell -ExecutionPolicy Bypass -File scripts/prebuild-clean.ps1 && electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --win",
+    "build:mac": "electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --mac --arm64",
+    "publish": "electron-builder --win --publish always",
+    "publish:mac": "electron-builder --mac --arm64 --publish always",
+    "postinstall": "electron-builder install-app-deps",
+    "smoke:tools": "node scripts/smoke-tools.mjs",
+    "smoke:brain-ui": "node scripts/smoke-brain-ui.mjs",
+    "smoke:social": "node scripts/smoke-social.mjs",
+    "test:wechat-guard": "node scripts/test-wechat-command-guard.mjs",
+    "test:wechat-memory": "node scripts/test-wechat-memory-extractor.mjs",
+    "test:local-wechat-memory": "node scripts/run-electron-node.mjs scripts/test-local-wechat-memory.mjs",
+    "test:social-targets": "node scripts/test-social-targets.mjs",
+    "test:wechat-record-all": "node scripts/run-electron-node.mjs scripts/test-wechat-record-all.mjs",
+    "test:tool-router": "node src/test-tool-router.js",
+    "test:wechat-archive-evidence": "node scripts/run-electron-node.mjs scripts/test-wechat-archive-evidence.mjs",
+    "test:wechat-quote-context": "node scripts/test-wechat-quote-context.mjs",
+    "test:wechat-quote-citation": "node scripts/run-electron-node.mjs scripts/test-wechat-quote-citation.mjs",
+    "test:public-image-search": "node scripts/test-public-image-search.mjs",
+    "test:wechat-multi-mention-quote-image": "node scripts/run-electron-node.mjs scripts/test-wechat-multi-mention-quote-image.mjs",
+    "test:wechat-member-memory": "node scripts/run-electron-node.mjs scripts/test-wechat-member-permanent-memory.mjs",
+    "test:wechat-admin-priority": "node scripts/run-electron-node.mjs scripts/test-wechat-admin-priority.mjs",
+    "test:wechat-file-image-memory": "node scripts/run-electron-node.mjs scripts/test-wechat-file-image-memory.mjs",
+    "test:wechat-video-analysis": "node scripts/run-electron-node.mjs scripts/test-wechat-video-analysis.mjs",
+    "test:wechat-member-memory-tool": "node scripts/run-electron-node.mjs scripts/test-wechat-member-memory-tool.mjs",
+    "test:wechaty-offline-qr-notify": "node scripts/test-wechaty-offline-qr-notify.mjs"
+  },
+  "dependencies": {
+    "@honcho-ai/sdk": "^2.1.2",
+    "better-sqlite3": "^12.8.0",
+    "d3": "^7.9.0",
+    "electron-updater": "^6.3.9",
+    "honcho-ai": "^0.2.0",
+    "level-codec": "^10.0.0",
+    "level-errors": "^3.0.0",
+    "level-supports": "~1.0.0",
+    "mammoth": "^1.12.0",
+    "openai": "^6.34.0",
+    "pdf-parse": "^2.4.5",
+    "playwright": "^1.60.0",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "wechat-ilink-client": "^0.1.0",
+    "wechaty": "^1.20.2",
+    "wechaty-puppet": "^1.20.2",
+    "wechaty-puppet-wechat4u": "^1.14.14",
+    "ws": "^8.20.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.xiaoyuanda.bailongma",
+    "productName": "Bailongma",
+    "artifactName": "${productName}-Setup-${version}.${ext}",
+    "npmRebuild": false,
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**",
+      "src/voice/**"
+    ],
+    "extraResources": [
+      {
+        "from": "installer/macos",
+        "to": "setup"
+      }
+    ],
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "scripts/seed-memories.js",
+      "index.html",
+      "dashboard.html",
+      "brain.html",
+      "brain-ui.html",
+      "website.html",
+      "systemPrompt.html",
+      "activation.html",
+      "focus-banner.html",
+      "build/icon.ico",
+      "node_modules/level-codec/**/*",
+      "node_modules/level-errors/**/*",
+      "sandbox/**/*",
+      "music/**/*",
+      "package.json",
+      "!**/*.map",
+      "!src/test-*",
+      "!src/**/test-*",
+      "!scripts/smoke-*.mjs",
+      "!src/**/__pycache__/**",
+      "!src/**/*.pyc",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,*.d.ts}",
+      "!**/node_modules/.cache",
+      "!**/.vscode",
+      "!data/**/*"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "afterPack": "build/after-pack.cjs",
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": true,
+      "installerHeaderIcon": "build/installerHeaderIcon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/uninstallerSidebar.bmp",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Bailongma"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "xiaoguiwucan",
+        "repo": "BaiLongma",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

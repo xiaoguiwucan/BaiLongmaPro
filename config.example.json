@@ -1,0 +1,12 @@
+{
+  "clawbot": {},
+  "voice": {
+    "whisperModel": "small"
+  },
+  "tts": {
+    "ttsProvider": "",
+    "ttsVoiceId": "",
+    "doubaoKey": ""
+  },
+  "embedding": {}
+}
