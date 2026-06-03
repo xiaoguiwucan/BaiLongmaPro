@@ -15,13 +15,34 @@ pids
 *.pid
 *.seed
 *.pid.lock
+tmp/
+temp/
+*.tmp
+*.orig
 
 sandbox
 data
 backups/
 config.json
+config.local.json
+config.*.local.json
 *.bak
 *-bak
+
+# Local app/private state
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.session.json
+*.local-state.json
+
+# OS/editor local files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
 
 # Local process archive / Codex working notes
 .local-archive/
@@ -75,6 +96,7 @@ web_modules/
 
 # Optional npm cache directory
 .npm
+.pnpm-store/
 
 # Optional eslint cache
 .eslintcache
@@ -162,6 +184,9 @@ dist
 
 # Local Whisper Python environment
 .venv-whisper/
+.venv/
+venv/
+env/
 
 # Python cache
 __pycache__/
