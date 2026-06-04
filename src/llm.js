@@ -728,6 +728,28 @@ function throwIfAborted(signal) {
   throw err
 }
 
+export function isLikelyProgressOnlySendMessageContent(content = '') {
+  const value = String(content || '').trim().replace(/\s+/gu, ' ')
+  if (!value || value.length > 180) return false
+  if (/(?:已(?:经)?回复|回复(?:已)?完成|回复完毕|发送(?:已)?完成|发送完毕|无需(?:回复|补充)|本轮(?:结束|完成))/iu.test(value)) return false
+  const progress = /(?:我(?:先|来|去|再)?(?:查|看|确认|核实|搜|找|打开|读取|了解)(?:一下|下|具体|资料|时间|日期)?|(?:稍等|等我|马上|这就|我看看|我查查|我看一下)|(?:上网|联网)(?:查|确认|搜|看)|(?:I'll|I will|let me)\s+(?:check|look up|verify|search))/iu.test(value)
+  if (!progress) return false
+  return /(?:稍等|等我|马上|这就|一下|下|具体|确认|核实|查查|看看|上网|联网|search|verify|check|look up)/iu.test(value)
+}
+
+function shouldStopAfterSendMessage(stopAfterSuccessfulSendMessage, toolCall = {}) {
+  if (!stopAfterSuccessfulSendMessage) return false
+  if (typeof stopAfterSuccessfulSendMessage === 'function') {
+    try {
+      return stopAfterSuccessfulSendMessage(toolCall) !== false
+    } catch (err) {
+      console.warn(`[工具循环] stopAfterSuccessfulSendMessage 判断失败，按默认提前结束：${err?.message || err}`)
+      return true
+    }
+  }
+  return true
+}
+
 // 主调用：agentic 循环，连续执行工具直到模型停止
 // 返回 { content: string, toolResult: { name, args, result } | null, aborted: bool }
 export async function callLLM({
@@ -909,7 +931,9 @@ export async function callLLM({
       // 任何非 send_message 工具都把它清掉——意味着模型在 send_message 之后又做了新工作，
       // 那之前那次 send_message 只是过场（"好，我去看看…"），还欠用户一次最终回复。
       // 这样 line ~641 的"沉默退出 nudge"才能在该补刀时正确触发。
-      if (tc.name === 'send_message') sentMessage = isSuccessfulSendMessageResult(result)
+      if (tc.name === 'send_message') {
+        sentMessage = isSuccessfulSendMessageResult(result) && shouldStopAfterSendMessage(stopAfterSuccessfulSendMessage, { name: tc.name, args: normalizedArgs, result, toolContext })
+      }
       else sentMessage = false
       if (shouldPersistActionLog(tc.name)) {
         insertActionLog({
@@ -943,7 +967,7 @@ export async function callLLM({
         if (preparedBatch.length > 1) {
           if (!suppressToolLogs) console.log(`[工具并行] ${preparedBatch.map(item => item.tc.name).join(', ')}`)
           const batchResults = await Promise.all(preparedBatch.map(item => runPreparedToolCall(item)))
-          toolResults.push(...batchResults.map(({ id, name, result }) => ({ id, name, result })))
+          toolResults.push(...batchResults.map(({ id, name, args, result }) => ({ id, name, args, result })))
           const lastBatchResult = batchResults[batchResults.length - 1]
           if (lastBatchResult) {
             lastToolResult = {
@@ -956,20 +980,20 @@ export async function callLLM({
           callIndex += preparedBatch.length
         } else {
           const result = await runPreparedToolCall(firstPrepared)
-          toolResults.push({ id: result.id, name: result.name, result: result.result })
+          toolResults.push({ id: result.id, name: result.name, args: result.args, result: result.result })
           toolLoopStopReason = result.stopReason
           callIndex += 1
-          if (stopAfterSuccessfulSendMessage && result.name === 'send_message' && isSuccessfulSendMessageResult(result.result)) {
+          if (result.name === 'send_message' && isSuccessfulSendMessageResult(result.result) && shouldStopAfterSendMessage(stopAfterSuccessfulSendMessage, result)) {
             callIndex = effectiveToolCalls.length
             break
           }
         }
       } else {
         const result = await runPreparedToolCall(firstPrepared)
-        toolResults.push({ id: result.id, name: result.name, result: result.result })
+        toolResults.push({ id: result.id, name: result.name, args: result.args, result: result.result })
         toolLoopStopReason = result.stopReason
         callIndex += 1
-        if (stopAfterSuccessfulSendMessage && result.name === 'send_message' && isSuccessfulSendMessageResult(result.result)) {
+        if (result.name === 'send_message' && isSuccessfulSendMessageResult(result.result) && shouldStopAfterSendMessage(stopAfterSuccessfulSendMessage, result)) {
           callIndex = effectiveToolCalls.length
           break
         }
@@ -999,7 +1023,7 @@ export async function callLLM({
     if (stopAfterToolSet.size > 0 && toolResults.some(tr => stopAfterToolSet.has(tr.name))) {
       break
     }
-    if (stopAfterSuccessfulSendMessage && toolResults.some(tr => tr.name === 'send_message' && isSuccessfulSendMessageResult(tr.result))) {
+    if (toolResults.some(tr => tr.name === 'send_message' && isSuccessfulSendMessageResult(tr.result) && shouldStopAfterSendMessage(stopAfterSuccessfulSendMessage, tr))) {
       break
     }
 

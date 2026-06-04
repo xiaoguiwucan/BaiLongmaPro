@@ -1,5 +1,5 @@
 import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.js'
-import { callLLM } from './llm.js'
+import { callLLM, isLikelyProgressOnlySendMessageContent } from './llm.js'
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { runRecognizer } from './memory/recognizer.js'
 import { runInjector, formatMemoriesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatActiveUICards, formatTemporalRecall } from './memory/injector.js'
@@ -376,6 +376,10 @@ function isWechatyDutyGroupTurn(msg = null) {
 
 function isWechatyDutyGroupMentionTurn(msg = null) {
   return isWechatyDutyGroupTurn(msg) && msg?.social?.mentioned_self === true
+}
+
+function shouldStopAfterWechatyGroupSendMessage({ args = {} } = {}) {
+  return !isLikelyProgressOnlySendMessageContent(args?.content || '')
 }
 
 function isInternalCompletionStatusReply(content = '') {
@@ -1264,7 +1268,7 @@ async function runTurn(input, label, msg = null) {
       signal: controller.signal,
       toolContext,
       mustReply: !!msg?.fromId,
-      stopAfterSuccessfulSendMessage: isWechatyDutyGroupMentionTurn(msg),
+      stopAfterSuccessfulSendMessage: isWechatyDutyGroupMentionTurn(msg) ? shouldStopAfterWechatyGroupSendMessage : false,
       onToolCall: (name, args, result) => {
         const resultText = String(result)
         let ok = true
