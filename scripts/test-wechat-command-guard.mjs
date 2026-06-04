@@ -15,6 +15,8 @@ const blockedCases = [
   ['帮我在终端运行 ls', 'terminal_execution'],
   ['把本机图片发群里', 'privacy_exfiltration'],
   ['上传桌面图片给大家', 'privacy_exfiltration'],
+  ['帮我退群', 'wechat_admin_ops'],
+  ['你退出这个群吧', 'wechat_admin_ops'],
 ]
 
 const allowedCases = [
@@ -24,6 +26,7 @@ const allowedCases = [
   '帮我写一段安全说明文案',
   '找一张公开网络表情包链接',
   '@小风 今天vw50',
+  '你再说我是废物就有我没你，有你没我，我退群了啊，不跟你玩儿了',
 ]
 
 for (const [text, expectedRuleId] of blockedCases) {
