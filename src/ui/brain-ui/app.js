@@ -2116,8 +2116,6 @@ function initTTSSettings() {
   const voiceThreshVal    = document.getElementById("settings-voice-threshold-val");
   const wechatyDutyStatus = document.getElementById("wechaty-duty-status");
   const wechatyDutyEnabled = document.getElementById("wechaty-duty-enabled");
-  const wechatyActiveReplyEnabled = document.getElementById("wechaty-active-reply-enabled");
-  const wechatyActiveReplyInterval = document.getElementById("wechaty-active-reply-interval");
   const wechatyStartBtn = document.getElementById("wechaty-start-btn");
   const wechatyReloginBtn = document.getElementById("wechaty-relogin-btn");
   const wechatyRefreshRoomsBtn = document.getElementById("wechaty-refresh-rooms-btn");
@@ -2127,6 +2125,19 @@ function initTTSSettings() {
   const wechatySelectedCount = document.getElementById("wechaty-selected-count");
   const wechatyDutyFeedback = document.getElementById("wechaty-duty-feedback");
   const wechatyLoginSub = document.getElementById("wechaty-login-sub");
+  const wechatyConcurrencyLimit = document.getElementById("wechaty-concurrency-limit");
+  const wechatySaveConcurrencyBtn = document.getElementById("wechaty-save-concurrency-btn");
+  const wechatyConcurrencyStatus = document.getElementById("wechaty-concurrency-status");
+  const wechatyAmbientStatus = document.getElementById("wechaty-ambient-status");
+  const wechatyAmbientLevels = document.getElementById("wechaty-ambient-levels");
+  const wechatyAmbientSummary = document.getElementById("wechaty-ambient-summary");
+  const wechatyAmbientTtl = document.getElementById("wechaty-ambient-ttl");
+  const wechatyAmbientProfileEditor = document.getElementById("wechaty-ambient-profile-editor");
+  const wechatyAmbientRules = document.getElementById("wechaty-ambient-rules");
+  const wechatyAmbientLast = document.getElementById("wechaty-ambient-last");
+  const wechatyAmbientImageLast = document.getElementById("wechaty-ambient-image-last");
+  const wechatySaveAmbientBtn = document.getElementById("wechaty-save-ambient-btn");
+  const wechatyResetAmbientBtn = document.getElementById("wechaty-reset-ambient-btn");
   const wechatyPersonaPrompt = document.getElementById("wechaty-persona-prompt");
   const wechatyPersonaPresets = document.getElementById("wechaty-persona-presets");
   const wechatyPersonaActive = document.getElementById("wechaty-persona-active");
@@ -2799,7 +2810,7 @@ function initTTSSettings() {
     llmMonitorGroupList.innerHTML = candidates.map(room => {
       const groupKey = String(room.id || room.topic || "").trim();
       const checked = llmMonitorGroupSelected(room, selected) ? " checked" : "";
-      const subtitle = room.savedOnly ? "已保存但当前未在线" : (room.stale ? "缓存/未选中 @ 回复" : "当前可通知");
+      const subtitle = room.savedOnly ? "已保存但当前未在线" : (room.stale ? "缓存/未开启自由回复" : "当前可通知");
       const mentionCount = llmMonitorMentionIdsForGroup(cfg, { id: groupKey, topic: room.topic }).length;
       return `<div class="llm-monitor-group-card${checked ? "" : " disabled"}" data-group-key="${escapeHtml(groupKey)}" data-topic="${escapeHtml(room.topic || "")}" data-members-loaded="false">
         <label class="llm-monitor-item" title="${escapeHtml(room.id || "")}">
@@ -3147,6 +3158,23 @@ function initTTSSettings() {
   let wechatyRecordsLastQuery = null;
   let wechatyRecordsToAutoNow = true;
   let wechatyStatsAutoRefreshTimer = null;
+  const WECHATY_AMBIENT_LEVELS = [
+    { id: "quiet", label: "安静" },
+    { id: "normal", label: "正常" },
+    { id: "active", label: "活跃" },
+    { id: "crazy", label: "发疯" },
+  ];
+  const DEFAULT_WECHATY_AMBIENT_REPLY = {
+    activityLevel: "normal",
+    ambientQueueTtlSeconds: 120,
+    levelProfiles: {
+      quiet: { minScore: 65, minIntervalSeconds: 30, hourlyLimit: 0, consecutiveLimit: 0 },
+      normal: { minScore: 50, minIntervalSeconds: 10, hourlyLimit: 0, consecutiveLimit: 0 },
+      active: { minScore: 35, minIntervalSeconds: 3, hourlyLimit: 0, consecutiveLimit: 0 },
+      crazy: { minScore: 20, minIntervalSeconds: 0, hourlyLimit: 0, consecutiveLimit: 0 },
+    },
+  };
+  let wechatyAmbientDraft = JSON.parse(JSON.stringify(DEFAULT_WECHATY_AMBIENT_REPLY));
 
   function formatWechatyTime(value, full = false) {
     if (!value) return '';
@@ -3190,7 +3218,7 @@ function initTTSSettings() {
 
   function describeWechatyCachedSuffix(status = {}) {
     const parts = [];
-    if (status.rooms_stale || wechatyRoomsAreStale) parts.push('下方是上次缓存，不代表当前在线，也不能接收 @ 消息');
+    if (status.rooms_stale || wechatyRoomsAreStale) parts.push('下方是上次缓存，不代表当前在线，也不能自由回复');
     if (status.last_room_refresh_at) parts.push(`上次真实刷新 ${formatWechatyTime(status.last_room_refresh_at)}`);
     if (status.error) parts.push(`错误：${status.error}`);
     return parts.length ? `（${parts.join('；')}）` : '';
@@ -3297,12 +3325,207 @@ function initTTSSettings() {
     };
   }
 
-  function collectWechatyActiveReplyConfig() {
-    const interval = Number(wechatyActiveReplyInterval?.value || 60);
+  function normalizeWechatyConcurrencyLimit(value) {
+    const raw = Number(value);
+    if (!Number.isFinite(raw)) return 6;
+    return Math.min(20, Math.max(1, Math.floor(raw)));
+  }
+
+  function collectWechatyConcurrencyLimit() {
+    return normalizeWechatyConcurrencyLimit(wechatyConcurrencyLimit?.value || 6);
+  }
+
+  function applyWechatyConcurrencyConfig(config = {}, status = {}) {
+    const limit = normalizeWechatyConcurrencyLimit(config.concurrencyLimit ?? config.concurrency_limit ?? status.concurrency_limit ?? 6);
+    if (wechatyConcurrencyLimit) wechatyConcurrencyLimit.value = String(limit);
+    const worker = status.worker_state || {};
+    const active = Number(worker.active || 0);
+    const activeMention = Number(worker.active_mention ?? worker.activeMention ?? 0);
+    const activeAmbient = Number(worker.active_ambient ?? worker.activeAmbient ?? 0);
+    const pendingMention = Number(worker.pending_mention ?? worker.pendingMention ?? 0);
+    const pendingAmbient = Number(worker.pending_ambient ?? worker.pendingAmbient ?? 0);
+    if (wechatyConcurrencyStatus) {
+      wechatyConcurrencyStatus.textContent = `当前已保存：${limit} 个；运行中 ${active} 个（@ ${activeMention} / 自由 ${activeAmbient}），排队 ${pendingMention + pendingAmbient} 个（@ ${pendingMention} / 自由 ${pendingAmbient}）`;
+    }
+  }
+
+  function clampWechatyNumber(value, fallback, min, max) {
+    const raw = Number(value);
+    if (!Number.isFinite(raw)) return fallback;
+    return Math.min(max, Math.max(min, Math.floor(raw)));
+  }
+
+  function normalizeWechatyAmbientProfile(profile = {}, fallback = {}) {
+    const raw = profile && typeof profile === "object" ? profile : {};
+    const base = fallback && typeof fallback === "object" ? fallback : {};
     return {
-      enabled: wechatyActiveReplyEnabled?.checked === true,
-      minIntervalSeconds: [30, 60, 180, 300, 600].includes(interval) ? interval : 60,
+      minScore: clampWechatyNumber(raw.minScore ?? raw.min_score, base.minScore ?? 50, 0, 100),
+      minIntervalSeconds: clampWechatyNumber(raw.minIntervalSeconds ?? raw.min_interval_seconds, base.minIntervalSeconds ?? 10, 0, 3600),
+      hourlyLimit: clampWechatyNumber(raw.hourlyLimit ?? raw.hourly_limit, base.hourlyLimit ?? 0, 0, 999),
+      consecutiveLimit: clampWechatyNumber(raw.consecutiveLimit ?? raw.consecutive_limit, base.consecutiveLimit ?? 0, 0, 99),
     };
+  }
+
+  function normalizeWechatyAmbientConfig(config = {}) {
+    const raw = config && typeof config === "object" ? config : {};
+    const profiles = raw.levelProfiles || raw.level_profiles || {};
+    const levelIds = WECHATY_AMBIENT_LEVELS.map(item => item.id);
+    const rawLevel = String((raw.activityLevel ?? raw.activity_level) || "");
+    const activityLevel = levelIds.includes(rawLevel) ? rawLevel : DEFAULT_WECHATY_AMBIENT_REPLY.activityLevel;
+    const levelProfiles = {};
+    for (const item of WECHATY_AMBIENT_LEVELS) {
+      levelProfiles[item.id] = normalizeWechatyAmbientProfile(profiles[item.id], DEFAULT_WECHATY_AMBIENT_REPLY.levelProfiles[item.id]);
+    }
+    return {
+      activityLevel,
+      ambientQueueTtlSeconds: clampWechatyNumber(raw.ambientQueueTtlSeconds ?? raw.ambient_queue_ttl_seconds, DEFAULT_WECHATY_AMBIENT_REPLY.ambientQueueTtlSeconds, 10, 600),
+      levelProfiles,
+    };
+  }
+
+  function unlimitedLabel(value, unit = "") {
+    const n = Number(value || 0);
+    return n === 0 ? "无限" : `${n}${unit}`;
+  }
+
+  function renderWechatyAmbientSummary() {
+    const level = wechatyAmbientDraft.activityLevel || "normal";
+    const profile = wechatyAmbientDraft.levelProfiles?.[level] || DEFAULT_WECHATY_AMBIENT_REPLY.levelProfiles.normal;
+    const label = WECHATY_AMBIENT_LEVELS.find(item => item.id === level)?.label || "正常";
+    if (wechatyAmbientStatus) wechatyAmbientStatus.textContent = label;
+    if (wechatyAmbientSummary) {
+      wechatyAmbientSummary.textContent = `当前 ${label}：阈值 ${profile.minScore}；最小间隔 ${profile.minIntervalSeconds} 秒；每小时 ${unlimitedLabel(profile.hourlyLimit)}；连续发言 ${unlimitedLabel(profile.consecutiveLimit)}。`;
+    }
+  }
+
+  function renderWechatyAmbientProfileEditor() {
+    if (!wechatyAmbientProfileEditor) return;
+    wechatyAmbientProfileEditor.innerHTML = WECHATY_AMBIENT_LEVELS.map(level => {
+      const profile = wechatyAmbientDraft.levelProfiles?.[level.id] || DEFAULT_WECHATY_AMBIENT_REPLY.levelProfiles[level.id];
+      return `<div class="wechaty-ambient-profile-row" data-level="${level.id}">
+        <div class="wechaty-ambient-profile-name">${level.label}</div>
+        <label>接话阈值<input class="settings-input wechaty-ambient-input" type="number" min="0" max="100" step="1" data-level="${level.id}" data-field="minScore" value="${profile.minScore}"></label>
+        <label>最小间隔<input class="settings-input wechaty-ambient-input" type="number" min="0" max="3600" step="1" data-level="${level.id}" data-field="minIntervalSeconds" value="${profile.minIntervalSeconds}"></label>
+        <label>每小时上限<input class="settings-input wechaty-ambient-input" type="number" min="0" max="999" step="1" data-level="${level.id}" data-field="hourlyLimit" value="${profile.hourlyLimit}"></label>
+        <label>连续上限<input class="settings-input wechaty-ambient-input" type="number" min="0" max="99" step="1" data-level="${level.id}" data-field="consecutiveLimit" value="${profile.consecutiveLimit}"></label>
+      </div>`;
+    }).join("");
+    wechatyAmbientProfileEditor.querySelectorAll(".wechaty-ambient-input").forEach(input => {
+      input.addEventListener("input", () => {
+        const level = input.dataset.level;
+        const field = input.dataset.field;
+        if (!wechatyAmbientDraft.levelProfiles[level]) wechatyAmbientDraft.levelProfiles[level] = { ...DEFAULT_WECHATY_AMBIENT_REPLY.levelProfiles[level] };
+        const limits = {
+          minScore: [0, 100],
+          minIntervalSeconds: [0, 3600],
+          hourlyLimit: [0, 999],
+          consecutiveLimit: [0, 99],
+        }[field] || [0, 999];
+        wechatyAmbientDraft.levelProfiles[level][field] = clampWechatyNumber(input.value, wechatyAmbientDraft.levelProfiles[level][field], limits[0], limits[1]);
+        renderWechatyAmbientSummary();
+      });
+    });
+  }
+
+  function renderWechatyAmbientRules(rules = {}) {
+    if (!wechatyAmbientRules) return;
+    const renderRows = rows => (Array.isArray(rows) ? rows : []).map(row => `<tr><td>${escapeHtml(row.label || row.id || "")}</td><td>${escapeHtml(String(row.score ?? ""))}</td></tr>`).join("");
+    const positive = rules.positive || [];
+    const negative = rules.negative || [];
+    wechatyAmbientRules.innerHTML = `
+      <div class="wechaty-ambient-rule-table">
+        <b>正向评分</b>
+        <table><tbody>${renderRows(positive)}</tbody></table>
+      </div>
+      <div class="wechaty-ambient-rule-table">
+        <b>负向 / 抑制</b>
+        <table><tbody>${renderRows(negative)}</tbody></table>
+      </div>`;
+  }
+
+  function renderWechatyAmbientLastDecision(decision = null) {
+    if (!wechatyAmbientLast) return;
+    if (!decision) {
+      wechatyAmbientLast.textContent = "暂无判断记录。";
+      return;
+    }
+    const reasons = (decision.reasons || []).join("、") || "—";
+    const suppressions = (decision.suppressions || []).join("、") || "—";
+    const time = formatWechatyTime(decision.timestamp || "", true) || "—";
+    wechatyAmbientLast.innerHTML = `
+      <span><b>群</b>${escapeHtml(decision.group_name || decision.groupName || "—")}</span>
+      <span><b>发送人</b>${escapeHtml(decision.sender_name || decision.senderName || "—")}</span>
+      <span><b>分数</b>${Number(decision.score || 0)} / ${Number(decision.threshold || 0)}</span>
+      <span><b>结果</b>${decision.expired ? "排队过期" : (decision.triggered ? "触发" : "未触发")}</span>
+      <span><b>原因</b>${escapeHtml(reasons)}</span>
+      <span><b>抑制</b>${escapeHtml(suppressions)}</span>
+      <span><b>时间</b>${escapeHtml(time)}</span>`;
+  }
+
+  function renderWechatyAmbientLastImageDecision(decision = null) {
+    if (!wechatyAmbientImageLast) return;
+    if (!decision) {
+      wechatyAmbientImageLast.textContent = "暂无图片判断记录。";
+      return;
+    }
+    const reasons = (decision.reasons || []).join("、") || "—";
+    const suppressions = (decision.suppressions || []).join("、") || "—";
+    const time = formatWechatyTime(decision.timestamp || "", true) || "—";
+    wechatyAmbientImageLast.innerHTML = `
+      <span><b>群</b>${escapeHtml(decision.group_name || decision.groupName || "—")}</span>
+      <span><b>发送人</b>${escapeHtml(decision.sender_name || decision.senderName || "—")}</span>
+      <span><b>图片</b>${Number(decision.media_id || decision.mediaId || 0) || "—"}</span>
+      <span><b>识图</b>${escapeHtml(decision.vision_status || decision.visionStatus || "—")} / ${Number(decision.retry_count ?? decision.retryCount ?? 0)} 次</span>
+      <span><b>结果</b>${decision.triggered ? "触发接话" : "放弃/未触发"}</span>
+      <span><b>原因</b>${escapeHtml(reasons)}</span>
+      <span><b>抑制</b>${escapeHtml(suppressions)}</span>
+      <span><b>时间</b>${escapeHtml(time)}</span>`;
+  }
+
+  function applyWechatyAmbientConfig(config = {}, status = {}) {
+    const ambientStatus = status.ambient_reply || {};
+    const next = normalizeWechatyAmbientConfig(config.ambientReply || config.ambient_reply || ambientStatus.config || ambientStatus);
+    const editingAmbient = (wechatyAmbientProfileEditor && wechatyAmbientProfileEditor.contains(document.activeElement))
+      || document.activeElement === wechatyAmbientTtl
+      || (wechatyAmbientLevels && wechatyAmbientLevels.contains(document.activeElement));
+    if (!editingAmbient) {
+      wechatyAmbientDraft = JSON.parse(JSON.stringify(next));
+      if (wechatyAmbientTtl) wechatyAmbientTtl.value = String(next.ambientQueueTtlSeconds);
+      wechatyAmbientLevels?.querySelectorAll('input[name="wechaty-ambient-level"]').forEach(input => {
+        input.checked = input.value === next.activityLevel;
+      });
+      renderWechatyAmbientProfileEditor();
+    }
+    renderWechatyAmbientSummary();
+    renderWechatyAmbientRules(ambientStatus.rules || {});
+    renderWechatyAmbientLastDecision(ambientStatus.last_decision || null);
+    renderWechatyAmbientLastImageDecision(ambientStatus.last_image_decision || null);
+  }
+
+  function collectWechatyAmbientConfig() {
+    const selectedLevel = wechatyAmbientLevels?.querySelector('input[name="wechaty-ambient-level"]:checked')?.value || wechatyAmbientDraft.activityLevel || "normal";
+    const collected = normalizeWechatyAmbientConfig({
+      ...wechatyAmbientDraft,
+      activityLevel: selectedLevel,
+      ambientQueueTtlSeconds: wechatyAmbientTtl?.value || wechatyAmbientDraft.ambientQueueTtlSeconds,
+    });
+    if (wechatyAmbientProfileEditor) {
+      wechatyAmbientProfileEditor.querySelectorAll(".wechaty-ambient-input").forEach(input => {
+        const level = input.dataset.level;
+        const field = input.dataset.field;
+        if (!collected.levelProfiles[level]) collected.levelProfiles[level] = { ...DEFAULT_WECHATY_AMBIENT_REPLY.levelProfiles[level] };
+        const limits = {
+          minScore: [0, 100],
+          minIntervalSeconds: [0, 3600],
+          hourlyLimit: [0, 999],
+          consecutiveLimit: [0, 99],
+        }[field] || [0, 999];
+        collected.levelProfiles[level][field] = clampWechatyNumber(input.value, collected.levelProfiles[level][field], limits[0], limits[1]);
+      });
+    }
+    wechatyAmbientDraft = JSON.parse(JSON.stringify(collected));
+    renderWechatyAmbientSummary();
+    return collected;
   }
 
   function markWechatyOfflineQrNotifyEdited() {
@@ -3565,7 +3788,7 @@ function initTTSSettings() {
       const gid = groupDigestId(group);
       const checked = isWechatyDigestGroupSelected(group) ? " checked" : "";
       const stale = group.stale ? " stale" : "";
-      const stat = group.selected ? "已允许 @ 回复，可参与统计" : (group.knownOnly ? "已识别/有记录，未开启 @ 回复" : "未开启 @ 回复");
+      const stat = group.selected ? "已开启自由回复，可参与统计" : (group.knownOnly ? "已识别/有记录，未开启自由回复" : "未开启自由回复");
       const requestId = memoryGroupRequestId(group);
       return `<label class="wechaty-digest-group-item${stale}" title="${escapeHtml(gid)}">
         <input class="wechaty-digest-group-checkbox" type="checkbox" value="${escapeHtml(gid)}" data-group-id="${escapeHtml(gid)}" data-request-id="${escapeHtml(requestId)}" data-group-name="${escapeHtml(group.topic || "")}"${checked}>
@@ -3638,7 +3861,7 @@ function initTTSSettings() {
       const gid = groupDigestId(group);
       const checked = isWechatyHotspotGroupSelected(group) ? " checked" : "";
       const stale = group.stale ? " stale" : "";
-      const stat = group.selected ? "已允许 @ 回复，可接收舆情" : (group.knownOnly ? "已识别/有记录，未开启 @ 回复" : "未开启 @ 回复");
+      const stat = group.selected ? "已开启自由回复，可接收舆情" : (group.knownOnly ? "已识别/有记录，未开启自由回复" : "未开启自由回复");
       const requestId = memoryGroupRequestId(group);
       return `<label class="wechaty-digest-group-item${stale}" title="${escapeHtml(gid)}">
         <input class="wechaty-hotspot-group-checkbox" type="checkbox" value="${escapeHtml(gid)}" data-group-id="${escapeHtml(gid)}" data-request-id="${escapeHtml(requestId)}" data-group-name="${escapeHtml(group.topic || "")}"${checked}>
@@ -4184,7 +4407,8 @@ function initTTSSettings() {
           admin_mode_enabled: adminConfig.adminModeEnabled,
           admin_wechat_ids: adminConfig.adminWechatIds,
           blocked_wechat_ids: blockedConfig.blockedWechatIds,
-          active_reply: collectWechatyActiveReplyConfig(),
+          concurrency_limit: collectWechatyConcurrencyLimit(),
+          ambient_reply: collectWechatyAmbientConfig(),
           offline_qr_notify: collectWechatyOfflineQrNotifyConfig(),
         }),
       });
@@ -4219,7 +4443,8 @@ function initTTSSettings() {
           admin_mode_enabled: adminConfig.adminModeEnabled,
           admin_wechat_ids: adminConfig.adminWechatIds,
           blocked_wechat_ids: blockedConfig.blockedWechatIds,
-          active_reply: collectWechatyActiveReplyConfig(),
+          concurrency_limit: collectWechatyConcurrencyLimit(),
+          ambient_reply: collectWechatyAmbientConfig(),
           offline_qr_notify: collectWechatyOfflineQrNotifyConfig(),
         }),
       });
@@ -5792,13 +6017,8 @@ function initTTSSettings() {
 
   function applyWechatyDutyConfig(config = {}, status = {}) {
     if (wechatyDutyEnabled) wechatyDutyEnabled.checked = config.enabled !== false;
-    const activeReply = config.activeReply || config.active_reply || status.active_reply || {};
-    if (wechatyActiveReplyEnabled) wechatyActiveReplyEnabled.checked = activeReply.enabled === true;
-    if (wechatyActiveReplyInterval) {
-      const interval = Number(activeReply.minIntervalSeconds || activeReply.min_interval_seconds || 60);
-      const allowed = [30, 60, 180, 300, 600];
-      wechatyActiveReplyInterval.value = String(allowed.includes(interval) ? interval : 60);
-    }
+    applyWechatyConcurrencyConfig(config || {}, status || {});
+    applyWechatyAmbientConfig(config || {}, status || {});
     applyWechatyAdminConfig(config || {});
     applyWechatyBlockedConfig(config || {});
     applyWechatyOfflineQrNotifyConfig(config || {}, status || {});
@@ -5845,9 +6065,9 @@ function initTTSSettings() {
     if (wechatyLoginSub) {
       const user = status.login_user || status.last_login_user || '';
       const suffix = describeWechatyCachedSuffix(status);
-      if (connected) wechatyLoginSub.textContent = `${user ? `已真实在线：${user}。` : '已真实在线。'}已接入 ${matchedCount} 个群，可接收 @ 消息。`;
-      else if (status.status === "qr_ready") wechatyLoginSub.textContent = "等待扫码登录。请用要接入群聊的微信扫描下方二维码；扫码前缓存群不能接收 @ 消息。";
-      else if (offline) wechatyLoginSub.textContent = `${user ? `上次登录：${user}。` : ''}微信助手已离线，缓存群不可接收 @ 消息。请点“强制重新扫码”。${suffix}`;
+      if (connected) wechatyLoginSub.textContent = `${user ? `已真实在线：${user}。` : '已真实在线。'}已接入 ${matchedCount} 个群，可自由回复。`;
+      else if (status.status === "qr_ready") wechatyLoginSub.textContent = "等待扫码登录。请用要接入群聊的微信扫描下方二维码；扫码前缓存群不能自由回复。";
+      else if (offline) wechatyLoginSub.textContent = `${user ? `上次登录：${user}。` : ''}微信助手已离线，缓存群不能自由回复。请点“强制重新扫码”。${suffix}`;
       else if (status.status === "starting") wechatyLoginSub.textContent = "正在恢复微信登录态；超过 90 秒仍未真实在线会自动标记离线并提醒重新扫码。";
       else if (status.rooms_stale || ["logged_in", "connected", "rooms_pending"].includes(status.status)) wechatyLoginSub.textContent = `${user ? `检测到历史登录：${user}。` : ''}当前不能确认微信群消息通道可用，请点“强制重新扫码”。${suffix}`;
       else wechatyLoginSub.textContent = "未登录。点击“登录/恢复微信”；如果没有出现二维码，请点“强制重新扫码”。";
@@ -5880,7 +6100,7 @@ function initTTSSettings() {
         const topic = escapeHtml(String(room.topic || "未命名群"));
         const id = escapeHtml(String(room.id || ""));
         const checked = selected.has(room.topic) ? " checked" : "";
-        const badge = selected.has(room.topic) ? "@ 回复" : (room.knownOnly ? "已识别" : (wechatyRoomsAreStale ? "缓存" : "未开启"));
+        const badge = selected.has(room.topic) ? "自由回复" : (room.knownOnly ? "已识别" : (wechatyRoomsAreStale ? "缓存" : "未开启"));
         return `<label class="wechaty-room-item${(wechatyRoomsAreStale || room.knownOnly) ? ' stale' : ''}" title="${id}">
           <input class="wechaty-room-checkbox" type="checkbox" value="${topic}" data-topic="${topic}"${checked}>
           <span class="wechaty-room-main"><span class="wechaty-room-name">${topic}</span><span class="wechaty-room-id">${id}</span></span>
@@ -6036,7 +6256,7 @@ function initTTSSettings() {
       const info = overviewMap.get(rawKey) || overviewMap.get(reqId) || null;
       const counts = info?.counts || {};
       const active = reqId === wechatyActiveMemoryGroupId;
-      const stat = info ? `${counts.messages || 0} 消息 · ${counts.conclusions || 0} 结论 · ${counts.summaries || 0} 摘要` : (group.selected ? "已开启 @ 回复" : (group.knownOnly ? "已识别/有记录，未开启 @ 回复" : "可查看记录"));
+      const stat = info ? `${counts.messages || 0} 消息 · ${counts.conclusions || 0} 结论 · ${counts.summaries || 0} 摘要` : (group.selected ? "已开启自由回复" : (group.knownOnly ? "已识别/有记录，未开启自由回复" : "可查看记录"));
       return `<button class="wechaty-memory-group${active ? " active" : ""}${group.stale ? " stale" : ""}" type="button" data-group-id="${escapeHtml(reqId)}" data-group-name="${escapeHtml(group.topic)}">
         <span class="wechaty-memory-group-name">${escapeHtml(group.topic)}</span>
         <span class="wechaty-memory-group-stat">${escapeHtml(stat)}</span>
@@ -6953,6 +7173,8 @@ function initTTSSettings() {
     }
     if (wechatySaveGroupsBtn) wechatySaveGroupsBtn.disabled = true;
     if (wechatySavePersonaBtn) wechatySavePersonaBtn.disabled = true;
+    if (wechatySaveConcurrencyBtn) wechatySaveConcurrencyBtn.disabled = true;
+    if (wechatySaveAmbientBtn) wechatySaveAmbientBtn.disabled = true;
     try {
       const res = await fetch(`${API}/settings/social/wechaty-duty-group`, {
         method: "POST",
@@ -6965,7 +7187,8 @@ function initTTSSettings() {
           admin_mode_enabled: !!wechatyAdminEnabled?.checked,
           admin_wechat_ids: [...wechatyAdminIdSet],
           blocked_wechat_ids: collectWechatyBlockedConfig().blockedWechatIds,
-          active_reply: collectWechatyActiveReplyConfig(),
+          concurrency_limit: collectWechatyConcurrencyLimit(),
+          ambient_reply: collectWechatyAmbientConfig(),
           offline_qr_notify: collectWechatyOfflineQrNotifyConfig(),
         }),
       });
@@ -6984,11 +7207,34 @@ function initTTSSettings() {
     } finally {
       if (wechatySaveGroupsBtn) wechatySaveGroupsBtn.disabled = false;
       if (wechatySavePersonaBtn) wechatySavePersonaBtn.disabled = false;
+      if (wechatySaveConcurrencyBtn) wechatySaveConcurrencyBtn.disabled = false;
+      if (wechatySaveAmbientBtn) wechatySaveAmbientBtn.disabled = false;
     }
   }
 
   wechatySaveGroupsBtn?.addEventListener("click", () => saveWechatyDutySettings({ requireGroups: true, feedbackEl: wechatyDutyFeedback }));
   wechatySavePersonaBtn?.addEventListener("click", () => saveWechatyDutySettings({ requireGroups: false, feedbackEl: wechatyPersonaFeedback || wechatyDutyFeedback }));
+  wechatySaveConcurrencyBtn?.addEventListener("click", () => saveWechatyDutySettings({ requireGroups: false, feedbackEl: wechatyDutyFeedback }));
+  wechatySaveAmbientBtn?.addEventListener("click", () => saveWechatyDutySettings({ requireGroups: false, feedbackEl: wechatyDutyFeedback }));
+  wechatyResetAmbientBtn?.addEventListener("click", () => {
+    wechatyAmbientDraft = JSON.parse(JSON.stringify(DEFAULT_WECHATY_AMBIENT_REPLY));
+    if (wechatyAmbientTtl) wechatyAmbientTtl.value = String(wechatyAmbientDraft.ambientQueueTtlSeconds);
+    wechatyAmbientLevels?.querySelectorAll('input[name="wechaty-ambient-level"]').forEach(input => {
+      input.checked = input.value === wechatyAmbientDraft.activityLevel;
+    });
+    renderWechatyAmbientProfileEditor();
+    renderWechatyAmbientSummary();
+  });
+  wechatyAmbientLevels?.addEventListener("change", () => {
+    const level = wechatyAmbientLevels.querySelector('input[name="wechaty-ambient-level"]:checked')?.value;
+    if (level) wechatyAmbientDraft.activityLevel = level;
+    renderWechatyAmbientSummary();
+  });
+  wechatyAmbientTtl?.addEventListener("input", () => {
+    wechatyAmbientDraft.ambientQueueTtlSeconds = clampWechatyNumber(wechatyAmbientTtl.value, wechatyAmbientDraft.ambientQueueTtlSeconds, 10, 600);
+  });
+  applyWechatyConcurrencyConfig({ concurrencyLimit: 6 }, {});
+  applyWechatyAmbientConfig({ ambientReply: DEFAULT_WECHATY_AMBIENT_REPLY }, {});
   wechatyOfflineQrNotifyEnabled?.addEventListener("change", queueWechatyOfflineQrNotifySave);
   wechatyOfflineQrNotifyAutoRelogin?.addEventListener("change", queueWechatyOfflineQrNotifySave);
   wechatyOfflineQrNotifyCooldown?.addEventListener("change", queueWechatyOfflineQrNotifySave);

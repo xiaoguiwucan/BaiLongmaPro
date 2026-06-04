@@ -40,6 +40,16 @@ export function stripLeadingWechatMentions(text = '') {
   return value
 }
 
+function sanitizeWechatImageArtifacts(text = '') {
+  return String(text || '')
+    .replace(/原始大小标记\s*\d+/giu, '')
+    .replace(/\b(?:cdnmidimgurl|cdnbigimgurl|cdnthumburl|aeskey|msgid|newmsgid)\b[^，。；;\n]*/giu, '')
+    .replace(/「([^：:\n]{1,80})[：:]\s*\[图片\]\s*」/gu, '引用图片：$1发的那张图')
+    .replace(/\[图片\]\s*\[图片\]/gu, '[图片]')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+}
+
 export function shouldWakeInWeChatGroup(text = '', { mentionedSelf = false } = {}) {
   // 群助手不再绑定“前夜/小白龙/贾维斯”等固定唤醒词。
   // 只有上游连接器明确确认“@ 当前登录账号”时才唤醒；昵称、群备注、微信名以后怎么改都不影响。
@@ -170,7 +180,8 @@ export async function buildWeChatGroupCommandPrompt({
   mentionedSelf = false,
   mentionedMembers = [],
   adminVerified = false,
-  replyTargetId = ''
+  replyTargetId = '',
+  ambientDecision = null,
 } = {}) {
   const groupExternalId = makeWeChatGroupExternalId(groupId)
   const messages = getRecentWeChatGroupMessages(groupExternalId, { limit: 100, hours: 24 })
@@ -190,19 +201,27 @@ export async function buildWeChatGroupCommandPrompt({
       adminMembers = adminIds.map(id => members.find(member => String(member.sender_id || '') === String(id || '')) || { sender_id: id, display_name: id }).filter(Boolean)
     }
   } catch {}
-  const displayText = String(text || '').trim()
-  const userRawText = String(rawText || displayText).trim()
+  const displayText = sanitizeWechatImageArtifacts(String(text || '').trim())
+  const userRawText = sanitizeWechatImageArtifacts(String(rawText || displayText).trim())
   const quoteRawText = String(rawPayloadText || rawText || displayText).trim()
   const quoteContext = extractWeChatQuoteContext({ text: displayText || userRawText, rawText: quoteRawText, messageType })
   const quoteContextBlock = buildWeChatQuoteContextBlock({ text: displayText || userRawText, rawText: quoteRawText, messageType })
   const commandSource = quoteContext?.ok && quoteContext.currentText ? quoteContext.currentText : displayText || userRawText
   const commandText = stripLeadingWechatMentions(commandSource) || commandSource
+  const imageContext = ambientDecision?.image_context || ambientDecision?.imageContext || null
+  const imageSenderLabel = String(imageContext?.sender_name || imageContext?.senderName || senderName || '').trim()
+  const imageDescription = String(imageContext?.description || '').replace(/\s+/g, ' ').trim()
+  const imageLabels = Array.isArray(imageContext?.labels) ? imageContext.labels.map(v => String(v || '').trim()).filter(Boolean).slice(0, 12) : []
+  const quoteCitationLine = quoteContext?.kind === 'image'
+    ? `固定格式：引用图片：${imageSenderLabel ? `${imageSenderLabel}发的那张图` : '刚刚那张图'}${imageDescription ? `，内容是${imageDescription.slice(0, 80)}${imageDescription.length > 80 ? '…' : ''}` : ''}`
+    : `固定格式：引用${quoteContext?.sender ? ` @${quoteContext.sender}` : ''}：${String(quoteContext?.content || '[引用消息]').replace(/\s+/g, ' ').slice(0, 80)}${String(quoteContext?.content || '').length > 80 ? '…' : ''}`
   const quoteCitationInstruction = quoteContext?.ok
     ? [
         '<wechat-quote-citation-policy>',
         '本轮消息包含微信引用上下文。只要用户的问题和引用内容有关，回复第一行必须给出一条可见的短引用依据，然后再回答。',
-        `固定格式：引用${quoteContext.sender ? ` @${quoteContext.sender}` : ''}：${String(quoteContext.content || '[引用消息]').replace(/\s+/g, ' ').slice(0, 80)}${String(quoteContext.content || '').length > 80 ? '…' : ''}`,
-        '如果引用是图片/语音/视频/链接/小程序，就写“引用图片/引用语音/引用链接”等，并用已知摘要；不要输出 XML、base64、完整原文。',
+        quoteCitationLine,
+        '如果引用是图片，只能写“引用图片：某某发的那张图”并使用已解析图片摘要；不要输出“原始大小标记”、XML、base64、cdn URL 或消息 ID。',
+        '如果引用是语音/视频/链接/小程序，就写“引用语音/引用视频/引用链接”等，并用已知摘要；不要输出 XML、base64、完整原文。',
         '如果用户的问题明显与引用无关，可以不引用；否则不要省略这行。',
         '</wechat-quote-citation-policy>',
       ].join('\n')
@@ -225,6 +244,31 @@ export async function buildWeChatGroupCommandPrompt({
         '硬性要求：禁止回复“没叫我”“不是@我”“跳过”“无需回应”等内容；必须直接回答用户真正的问题或请求。',
         '</wechat-mention-verification>',
       ].join('\n')
+    : ''
+  const ambientReplyBlock = !mentionedSelf && ambientDecision
+    ? [
+        '<wechat-ambient-reply>',
+        '这是微信群自由回复模式触发的主动接话，不是用户显式 @ 你。',
+        `评分：${Number(ambientDecision.score || 0)} / 阈值：${Number(ambientDecision.threshold || 0)}；活跃度：${ambientDecision.activityLevel || 'normal'}。`,
+        `触发原因：${(ambientDecision.reasons || []).join('、') || '语境判断可接话'}。`,
+        '回复要求：像真实群友一样自然接一句；默认不要 @ 任何人，不要抢话，不要长篇刷屏。',
+        '如果这是求助、总结、查记录、识图、视频、文件或群记忆相关请求，要按完整能力处理，而不是只闲聊。',
+        '既然系统已经触发自由接话，就给出一条短而自然的最终回复；不要回复“没人叫我/没 @ 我”。',
+        '</wechat-ambient-reply>',
+      ].join('\n')
+    : ''
+  const imageReplyBlock = imageContext?.description
+    ? [
+        '<wechat-image-reply>',
+        mentionedSelf ? '这是微信群 @ 看图/图片相关回复。' : '这是微信群图片自由接话。',
+        `图片发送人：${imageSenderLabel || '未知群友'}；media_id：${Number(imageContext.media_id || imageContext.mediaId || 0) || 0}；识图状态：${imageContext.vision_status || imageContext.visionStatus || 'done'}；查询次数：${Number(imageContext.retry_count ?? imageContext.retryCount ?? 0) || 0}。`,
+        `图片描述：${imageDescription}`,
+        imageLabels.length ? `图片标签：${imageLabels.join('、')}` : '',
+        '硬性要求：必须基于图片描述/标签回答；不要说“我看不到图”；不要输出微信 XML、图片占位、原始大小标记、cdn URL、msgid/newmsgid 或 base64。',
+        `如果需要引用图片，只说“刚刚${imageSenderLabel ? imageSenderLabel : '群友'}发的那张图”。`,
+        '回复要短，像群友自然接话；除非图片是求助、报错、文档、作业或需要完整分析，否则不要长篇。',
+        '</wechat-image-reply>',
+      ].filter(Boolean).join('\n')
     : ''
   const mentionedMembersBlock = Array.isArray(mentionedMembers) && mentionedMembers.length
     ? [
@@ -272,14 +316,16 @@ export async function buildWeChatGroupCommandPrompt({
     : '群友个人永久记忆写入规则：如果群友明确说“记住这个/记入我的个人记忆库/保存到群友个人永久记忆库/能记多少记多少”，必须调用 wechat_member_memory_write，把可见的正文或你整理出的高信息密度内容写入当前发言人的个人永久记忆库；工具存在，禁止回复“没有写接口/只能搜索/不能创建记忆”。'
   const triggerIntro = mentionedSelf
     ? `微信群${groupName ? `「${groupName}」` : ''}成员 ${senderName || senderId || '未知成员'} 已经 @ 你并发来消息。`
-    : `微信群${groupName ? `「${groupName}」` : ''}成员 ${senderName || senderId || '未知成员'} 发来一条普通群聊消息；当前群已开启主动回复，所以你可以自然接话。`
+    : `微信群${groupName ? `「${groupName}」` : ''}成员 ${senderName || senderId || '未知成员'} 发来一条群聊消息，系统判断你可以自然接话。`
   const replyTargetLine = replyTargetId
     ? mentionedSelf
       ? `本轮回复必须调用 send_message(target_id="${replyTargetId}")；系统会自动投递到当前微信群并 @ 这个真实提问人，不要改成群主/管理员/上一位成员。`
-      : `本轮回复必须调用 send_message(target_id="${replyTargetId}")；这是主动回复普通群聊消息，不要声称对方 @ 了你，也不要回复“没叫我/不需要回应”。`
+      : `本轮回复必须调用 send_message(target_id="${replyTargetId}")；系统会投递到当前微信群，默认不 @ 任何人。`
     : ''
   return [
     verifiedMentionBlock,
+    ambientReplyBlock,
+    imageReplyBlock,
     mentionedMembersBlock,
     adminBlock,
     adminProtectionBlock,
@@ -306,7 +352,7 @@ export async function buildWeChatGroupCommandPrompt({
     imageRequestLine,
     fileReplyLine,
     memberMemoryWriteLine,
-    '如果用户说“看图/识图/图片里/引用图片”，这是图片理解请求，不是生图请求。若 <wechat-image-memory> 里有最近图片描述，必须基于描述分析；若为空，说明 Wechaty 只拿到了引用文本“[图片]”而没有拿到像素内容，要明确让用户把图片直接重新发送一次，不要改成生成图片。',
+    '如果用户说“看图/识图/图片里/引用图片”，这是图片理解请求，不是生图请求。若本轮有 <wechat-image-reply>，必须基于图片描述分析；若没有图片描述，不要根据占位文本猜图，也不要输出“原始大小标记”。',
     /https?:\/\//i.test(commandText || userRawText) ? '链接查看硬规则：本轮用户给了 URL/网站/链接并要求查看、总结、分析或判断时，必须先调用 fetch_url；如果 fetch_url 内容为空、被拦截或需要 JS，再调用 browser_read。禁止只回复“我看看/正在查看/稍等/这个链接大概是”而不真实读取工具结果。' : '',
     '如果是总结群聊，给出「结论/重点/待办/风险」；不要编造记录里没有的信息。注意：不同微信群的记忆必须严格隔离，只能使用当前群的记忆。',
     '如果用户问题命中 <external-knowledge-context>，可以使用其中的外部知识库内容回答；使用时请给出简短来源，例如“参考知识库：标题/来源”。外部知识库只包含全局知识和当前微信群绑定知识，禁止推测其它群知识。',

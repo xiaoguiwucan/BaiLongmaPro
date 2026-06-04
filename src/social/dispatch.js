@@ -113,9 +113,12 @@ async function sendClawbot({ userId }, content) {
 }
 
 async function sendWechaty({ roomId, memberId = '' }, content, options = {}) {
+  const suppressMention = options?.social?.suppress_mention === true
+    || (options?.social?.ambient_triggered === true && options?.social?.mentioned_self !== true)
   return sendWechatyDutyGroupMessage(roomId, content, {
-    mentionId: options?.social?.reply_mention_id || options?.social?.sender_id || options?.replyMentionId || memberId || '',
-    mentionName: options?.social?.reply_mention_name || options?.social?.sender_name || options?.replyMentionName || '',
+    mentionId: suppressMention ? '' : (options?.social?.reply_mention_id || options?.social?.sender_id || options?.replyMentionId || memberId || ''),
+    mentionName: suppressMention ? '' : (options?.social?.reply_mention_name || options?.social?.sender_name || options?.replyMentionName || ''),
+    suppressMention,
     adminBypass: options?.social?.wechat_admin === true,
     filePaths: options?.filePaths || [],
     social: options?.social || null,

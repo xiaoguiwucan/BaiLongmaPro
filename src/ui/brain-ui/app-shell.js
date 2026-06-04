@@ -893,7 +893,7 @@ const createSettingsModal = () => `
                 <span>按模块快速定位</span>
               </div>
               <nav>
-                <a href="#wechaty-connection-section"><em>01</em><span><b>连接与回复群</b><small>登录、群选择、主动回复</small></span></a>
+                <a href="#wechaty-connection-section"><em>01</em><span><b>连接与自由回复群</b><small>扫码、在线状态、接话范围</small></span></a>
                 <a href="#wechaty-capability-section"><em>02</em><span><b>回复能力</b><small>管理员、屏蔽、斗图、性格</small></span></a>
                 <a href="#wechaty-data-section"><em>03</em><span><b>记忆与战报</b><small>群记忆、统计、记录库</small></span></a>
                 <a href="#wechaty-hotspot-panel"><em>04</em><span><b>舆情推送</b><small>平台、关键词、接收群</small></span></a>
@@ -909,19 +909,19 @@ const createSettingsModal = () => `
             <div class="wechaty-console-hero">
               <div>
                 <span class="wechaty-console-kicker">WECHAT COMMAND CENTER</span>
-                <div class="settings-section-label">微信群助手（@ 回复）</div>
-                <p class="settings-hint">按下面 4 步配置：登录微信 → 选择允许 @ 回复的群 → 按需开启能力 → 保存。没 @ 的群消息只归档/统计，不会打扰。</p>
+                <div class="settings-section-label">微信群助手（自由回复）</div>
+                <p class="settings-hint">按下面 4 步配置：登录微信 → 选择开启自由回复的群 → 调整活跃度与并发 → 保存。未选择群只归档/记忆，不会回复。</p>
               </div>
               <div class="settings-platform-status" id="wechaty-duty-status">○ 未连接</div>
             </div>
             <section class="wechaty-feature-section connection" id="wechaty-connection-section">
               <div class="wechaty-feature-heading">
                 <span>01</span>
-                <div><b>连接与回复范围</b><small>只决定哪些群在 @ 助手后会收到回复；统计战报在下方单独选择。</small></div>
+                <div><b>连接与自由回复范围</b><small>只决定哪些群允许机器人自然接话；统计战报在下方单独选择。</small></div>
               </div>
             <div class="wechaty-command-grid">
               <div class="wechaty-command-main">
-                <div class="wechaty-panel-title"><b>连接与回复群</b><span>先做这里，其他能力才有数据来源。</span></div>
+                <div class="wechaty-panel-title"><b>连接与自由回复群</b><span>先做这里，其他能力才有数据来源。</span></div>
             <div class="wechaty-login-card">
               <div>
                 <div class="wechaty-login-title">微信登录状态</div>
@@ -935,22 +935,93 @@ const createSettingsModal = () => `
             <div class="wechaty-toolbar">
               <label class="wechaty-master-toggle">
                 <input id="wechaty-duty-enabled" type="checkbox" checked>
-                <span>启用微信群 @ 回复</span>
-              </label>
-              <label class="wechaty-master-toggle">
-                <input id="wechaty-active-reply-enabled" type="checkbox">
-                <span>允许非 @ 主动回复</span>
-              </label>
-              <label class="wechaty-inline-field">主动回复冷却
-                <select class="settings-select" id="wechaty-active-reply-interval">
-                  <option value="30">30 秒</option>
-                  <option value="60">1 分钟（推荐）</option>
-                  <option value="180">3 分钟</option>
-                  <option value="300">5 分钟</option>
-                  <option value="600">10 分钟</option>
-                </select>
+                <span>启用微信群自由回复</span>
               </label>
               <button class="settings-save-btn" id="wechaty-refresh-rooms-btn" type="button">刷新真实群列表</button>
+            </div>
+            <div class="wechaty-concurrency-card">
+              <div>
+                <div class="wechaty-login-title">并发回复上限</div>
+                <p class="settings-hint compact">同时限制 @ 必回和自由接话任务；@ 必回优先，不会被自由接话挤掉。</p>
+              </div>
+              <div class="wechaty-concurrency-controls">
+                <label>同时思考
+                  <select class="settings-select" id="wechaty-concurrency-limit">
+                    <option value="1">1 个</option>
+                    <option value="2">2 个</option>
+                    <option value="3">3 个</option>
+                    <option value="4">4 个</option>
+                    <option value="5">5 个</option>
+                    <option value="6">6 个（默认）</option>
+                    <option value="7">7 个</option>
+                    <option value="8">8 个</option>
+                    <option value="9">9 个</option>
+                    <option value="10">10 个</option>
+                    <option value="11">11 个</option>
+                    <option value="12">12 个</option>
+                    <option value="13">13 个</option>
+                    <option value="14">14 个</option>
+                    <option value="15">15 个</option>
+                    <option value="16">16 个</option>
+                    <option value="17">17 个</option>
+                    <option value="18">18 个</option>
+                    <option value="19">19 个</option>
+                    <option value="20">20 个（上限）</option>
+                  </select>
+                </label>
+                <button class="settings-save-btn" id="wechaty-save-concurrency-btn" type="button">保存并发上限</button>
+                <span class="wechaty-concurrency-status" id="wechaty-concurrency-status">当前已保存：6 个</span>
+              </div>
+            </div>
+            <div class="wechaty-ambient-card">
+              <div class="wechaty-subsection-head">
+                <div>
+                  <div class="wechaty-subsection-title">群活跃度</div>
+                  <p class="settings-hint compact">控制自由接话的门槛和节奏。显式 @ 机器人仍然必回，但只限已开启自由回复的群。</p>
+                </div>
+                <span class="wechaty-ambient-status" id="wechaty-ambient-status">正常</span>
+              </div>
+              <div class="wechaty-ambient-levels" id="wechaty-ambient-levels" role="radiogroup" aria-label="群活跃度">
+                <label><input type="radio" name="wechaty-ambient-level" value="quiet"><span>安静</span></label>
+                <label><input type="radio" name="wechaty-ambient-level" value="normal" checked><span>正常</span></label>
+                <label><input type="radio" name="wechaty-ambient-level" value="active"><span>活跃</span></label>
+                <label><input type="radio" name="wechaty-ambient-level" value="crazy"><span>发疯</span></label>
+              </div>
+              <div class="wechaty-ambient-summary" id="wechaty-ambient-summary">阈值 50；最小间隔 10 秒；每小时无限；连续发言无限。</div>
+              <div class="settings-row-action">
+                <button class="settings-save-btn primary" id="wechaty-save-ambient-btn" type="button">保存自由回复参数</button>
+                <button class="settings-save-btn subtle" id="wechaty-reset-ambient-btn" type="button">恢复默认四档</button>
+              </div>
+            </div>
+            <div class="wechaty-ambient-profile-card">
+              <div class="wechaty-subsection-head">
+                <div>
+                  <div class="wechaty-subsection-title">活跃度参数编辑器</div>
+                  <p class="settings-hint compact">0 表示无限；保存后实时生效。自由接话任务排队超过 TTL 会丢弃，避免旧话题延迟接梗。</p>
+                </div>
+                <label class="wechaty-ambient-ttl">自由任务 TTL
+                  <input class="settings-input" id="wechaty-ambient-ttl" type="number" min="10" max="600" step="1" value="120">
+                </label>
+              </div>
+              <div class="wechaty-ambient-profile-editor" id="wechaty-ambient-profile-editor"></div>
+            </div>
+            <div class="wechaty-ambient-rules-card">
+              <div class="wechaty-subsection-head">
+                <div>
+                  <div class="wechaty-subsection-title">接话评分标准</div>
+                  <p class="settings-hint compact">@ 机器人 = 强制触发，但仅限已开启自由回复的群；安全规则高于评分。</p>
+                </div>
+              </div>
+              <div class="wechaty-ambient-rules" id="wechaty-ambient-rules"></div>
+            </div>
+            <div class="wechaty-ambient-last-card">
+              <div class="wechaty-subsection-title">最近接话判断</div>
+              <div class="wechaty-ambient-last" id="wechaty-ambient-last">暂无判断记录。</div>
+            </div>
+            <div class="wechaty-ambient-last-card">
+              <div class="wechaty-subsection-title">图片接话策略</div>
+              <p class="settings-hint compact">图片必须先完成识图再接话；默认查询 3 次，每次间隔 5 秒。三次后仍未解析完成，本轮直接放弃，不根据占位文本胡编。</p>
+              <div class="wechaty-ambient-last" id="wechaty-ambient-image-last">暂无图片判断记录。</div>
             </div>
             <div class="wechaty-qr-area" id="wechaty-qr-area" style="display:none;">
               <img id="wechaty-qr-img" src="" alt="Wechaty 微信登录二维码">
@@ -993,18 +1064,18 @@ const createSettingsModal = () => `
               <div class="wechaty-empty">点击“连接/恢复微信”后刷新群列表</div>
             </div>
             <div class="settings-row-action wechaty-sticky-action">
-              <button class="settings-save-btn primary" id="wechaty-save-groups-btn" type="button">保存回复群并生效</button>
+              <button class="settings-save-btn primary" id="wechaty-save-groups-btn" type="button">保存自由回复群并生效</button>
               <span class="settings-feedback" id="wechaty-duty-feedback"></span>
             </div>
               </div>
               <aside class="wechaty-command-aside">
                 <div class="wechaty-usage-card">
                   <b>怎么触发？</b>
-                  <p>默认只在已勾选的微信群里 @ 当前扫码登录微信号时回复；开启非 @ 主动回复后，普通群聊也会按冷却间隔自然接话。</p>
+                  <p>已勾选群会按语境评分自动接话；在这些群里 @ 当前扫码微信号会强制回复。</p>
                 </div>
                 <div class="wechaty-usage-card">
                   <b>群选择有两套</b>
-                  <p>上方是「允许 @ 回复」；下面统计区是「参与统计/定时总结」。两者故意独立，避免误发。</p>
+                  <p>上方是「开启自由回复」；下面统计区是「参与统计/定时总结」。两者故意独立，避免误发。</p>
                 </div>
                 <div class="wechaty-usage-card warning">
                   <b>掉线通知</b>
@@ -1232,7 +1303,7 @@ const createSettingsModal = () => `
                 <div class="wechaty-digest-group-head">
                   <div>
                     <b>选择参与统计/定时总结的群组</b>
-                    <small>这里独立于上方“@ 回复群组”；只有勾选并保存后，后续新消息才会写入本地统计库并参与定时总结。</small>
+                    <small>这里独立于上方“自由回复群”；只有勾选并保存后，后续新消息才会写入本地统计库并参与定时总结。</small>
                   </div>
                   <span id="wechaty-digest-group-count">未选择</span>
                 </div>
@@ -1336,7 +1407,7 @@ const createSettingsModal = () => `
                 <div class="wechaty-digest-group-head">
                   <div>
                     <b>选择接收舆情提醒的微信群</b>
-                    <small>这里独立于“@ 回复群组”和“统计/定时总结群组”；只有勾选并保存后，舆情提醒才会发到这些群。</small>
+                    <small>这里独立于“自由回复群”和“统计/定时总结群组”；只有勾选并保存后，舆情提醒才会发到这些群。</small>
                   </div>
                   <span id="wechaty-hotspot-group-count">未选择</span>
                 </div>

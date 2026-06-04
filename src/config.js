@@ -1372,6 +1372,95 @@ const DEFAULT_WECHATY_ACTIVE_REPLY = {
   minIntervalSeconds: 60,
 }
 
+export const WECHATY_DUTY_GROUP_CONCURRENCY_DEFAULT = 6
+export const WECHATY_DUTY_GROUP_CONCURRENCY_MAX = 20
+export const WECHATY_AMBIENT_ACTIVITY_LEVELS = ['quiet', 'normal', 'active', 'crazy']
+export const WECHATY_AMBIENT_ACTIVITY_LABELS = {
+  quiet: '安静',
+  normal: '正常',
+  active: '活跃',
+  crazy: '发疯',
+}
+export const DEFAULT_WECHATY_AMBIENT_REPLY = {
+  activityLevel: 'normal',
+  ambientQueueTtlSeconds: 120,
+  levelProfiles: {
+    quiet: { minScore: 65, minIntervalSeconds: 30, hourlyLimit: 0, consecutiveLimit: 0 },
+    normal: { minScore: 50, minIntervalSeconds: 10, hourlyLimit: 0, consecutiveLimit: 0 },
+    active: { minScore: 35, minIntervalSeconds: 3, hourlyLimit: 0, consecutiveLimit: 0 },
+    crazy: { minScore: 20, minIntervalSeconds: 0, hourlyLimit: 0, consecutiveLimit: 0 },
+  },
+}
+
+function normalizeWechatyDutyGroupConcurrencyLimit(value) {
+  const raw = Number(value)
+  if (!Number.isFinite(raw)) return WECHATY_DUTY_GROUP_CONCURRENCY_DEFAULT
+  return Math.min(WECHATY_DUTY_GROUP_CONCURRENCY_MAX, Math.max(1, Math.floor(raw)))
+}
+
+function clampInteger(value, fallback, min, max) {
+  const raw = Number(value)
+  if (!Number.isFinite(raw)) return fallback
+  return Math.min(max, Math.max(min, Math.floor(raw)))
+}
+
+function normalizeWechatyAmbientActivityLevel(value) {
+  const level = String(value || '').trim()
+  return WECHATY_AMBIENT_ACTIVITY_LEVELS.includes(level) ? level : DEFAULT_WECHATY_AMBIENT_REPLY.activityLevel
+}
+
+function normalizeWechatyAmbientProfile(value = {}, fallback = {}) {
+  const raw = value && typeof value === 'object' ? value : {}
+  const base = fallback && typeof fallback === 'object' ? fallback : {}
+  return {
+    minScore: clampInteger(raw.minScore ?? raw.min_score, base.minScore ?? 50, 0, 100),
+    minIntervalSeconds: clampInteger(raw.minIntervalSeconds ?? raw.min_interval_seconds, base.minIntervalSeconds ?? 10, 0, 3600),
+    hourlyLimit: clampInteger(raw.hourlyLimit ?? raw.hourly_limit, base.hourlyLimit ?? 0, 0, 999),
+    consecutiveLimit: clampInteger(raw.consecutiveLimit ?? raw.consecutive_limit, base.consecutiveLimit ?? 0, 0, 99),
+  }
+}
+
+export function normalizeWechatyAmbientReplyConfig(value = {}) {
+  const raw = value && typeof value === 'object' ? value : {}
+  const rawProfiles = raw.levelProfiles || raw.level_profiles || {}
+  const levelProfiles = {}
+  for (const level of WECHATY_AMBIENT_ACTIVITY_LEVELS) {
+    levelProfiles[level] = normalizeWechatyAmbientProfile(rawProfiles[level], DEFAULT_WECHATY_AMBIENT_REPLY.levelProfiles[level])
+  }
+  return {
+    activityLevel: normalizeWechatyAmbientActivityLevel(raw.activityLevel ?? raw.activity_level),
+    ambientQueueTtlSeconds: clampInteger(
+      raw.ambientQueueTtlSeconds ?? raw.ambient_queue_ttl_seconds ?? raw.queueTtlSeconds ?? raw.queue_ttl_seconds,
+      DEFAULT_WECHATY_AMBIENT_REPLY.ambientQueueTtlSeconds,
+      10,
+      600
+    ),
+    levelProfiles,
+  }
+}
+
+function mergeWechatyAmbientLevelProfiles(baseProfiles = {}, patchProfiles = {}) {
+  const base = baseProfiles && typeof baseProfiles === 'object' ? baseProfiles : {}
+  const patch = patchProfiles && typeof patchProfiles === 'object' ? patchProfiles : {}
+  const merged = {}
+  const normalizePatch = (value = {}) => {
+    const raw = value && typeof value === 'object' ? value : {}
+    const out = {}
+    if (Object.prototype.hasOwnProperty.call(raw, 'minScore') || Object.prototype.hasOwnProperty.call(raw, 'min_score')) out.minScore = raw.minScore ?? raw.min_score
+    if (Object.prototype.hasOwnProperty.call(raw, 'minIntervalSeconds') || Object.prototype.hasOwnProperty.call(raw, 'min_interval_seconds')) out.minIntervalSeconds = raw.minIntervalSeconds ?? raw.min_interval_seconds
+    if (Object.prototype.hasOwnProperty.call(raw, 'hourlyLimit') || Object.prototype.hasOwnProperty.call(raw, 'hourly_limit')) out.hourlyLimit = raw.hourlyLimit ?? raw.hourly_limit
+    if (Object.prototype.hasOwnProperty.call(raw, 'consecutiveLimit') || Object.prototype.hasOwnProperty.call(raw, 'consecutive_limit')) out.consecutiveLimit = raw.consecutiveLimit ?? raw.consecutive_limit
+    return out
+  }
+  for (const level of WECHATY_AMBIENT_ACTIVITY_LEVELS) {
+    merged[level] = {
+      ...(base[level] && typeof base[level] === 'object' ? base[level] : {}),
+      ...normalizePatch(patch[level]),
+    }
+  }
+  return merged
+}
+
 export const DEFAULT_WECHAT_GROUP_ARCHIVE_CONFIG = {
   enabled: true,
   recordGroupNames: [],
@@ -1454,6 +1543,15 @@ export function getWechatyDutyGroupConfig() {
     adminIds: adminWechatIds,
     blockedWechatIds,
     blockedIds: blockedWechatIds,
+    concurrencyLimit: normalizeWechatyDutyGroupConcurrencyLimit(
+      stored.concurrencyLimit
+        ?? stored.concurrency_limit
+        ?? stored.replyConcurrencyLimit
+        ?? stored.reply_concurrency_limit
+        ?? stored.parallelLimit
+        ?? stored.parallel_limit
+    ),
+    ambientReply: normalizeWechatyAmbientReplyConfig(stored.ambientReply ?? stored.ambient_reply ?? DEFAULT_WECHATY_AMBIENT_REPLY),
     offlineQrNotify: normalizeWechatyOfflineQrNotify(stored.offlineQrNotify ?? stored.offline_qr_notify ?? DEFAULT_WECHATY_OFFLINE_QR_NOTIFY),
     activeReply: normalizeWechatyActiveReply(stored.activeReply ?? stored.active_reply ?? DEFAULT_WECHATY_ACTIVE_REPLY),
     runtime: stored.runtime && typeof stored.runtime === 'object' ? stored.runtime : {},
@@ -1500,6 +1598,51 @@ export function setWechatyDutyGroupConfig(updates = {}) {
     || Object.prototype.hasOwnProperty.call(updates, 'blocked_ids')
   ) {
     next.blockedWechatIds = normalizeWechatyAdminIds(updates.blockedWechatIds ?? updates.blocked_wechat_ids ?? updates.blockedIds ?? updates.blocked_ids)
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(updates, 'concurrencyLimit')
+    || Object.prototype.hasOwnProperty.call(updates, 'concurrency_limit')
+    || Object.prototype.hasOwnProperty.call(updates, 'replyConcurrencyLimit')
+    || Object.prototype.hasOwnProperty.call(updates, 'reply_concurrency_limit')
+    || Object.prototype.hasOwnProperty.call(updates, 'parallelLimit')
+    || Object.prototype.hasOwnProperty.call(updates, 'parallel_limit')
+  ) {
+    next.concurrencyLimit = normalizeWechatyDutyGroupConcurrencyLimit(
+      updates.concurrencyLimit
+        ?? updates.concurrency_limit
+        ?? updates.replyConcurrencyLimit
+        ?? updates.reply_concurrency_limit
+        ?? updates.parallelLimit
+        ?? updates.parallel_limit
+    )
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(updates, 'ambientReply')
+    || Object.prototype.hasOwnProperty.call(updates, 'ambient_reply')
+    || Object.prototype.hasOwnProperty.call(updates, 'activityLevel')
+    || Object.prototype.hasOwnProperty.call(updates, 'activity_level')
+    || Object.prototype.hasOwnProperty.call(updates, 'levelProfiles')
+    || Object.prototype.hasOwnProperty.call(updates, 'level_profiles')
+  ) {
+    const rawAmbient = updates.ambientReply ?? updates.ambient_reply ?? {}
+    const currentAmbient = normalizeWechatyAmbientReplyConfig(next.ambientReply ?? next.ambient_reply ?? DEFAULT_WECHATY_AMBIENT_REPLY)
+    const rawAmbientProfiles = rawAmbient && typeof rawAmbient === 'object'
+      ? (rawAmbient.levelProfiles || rawAmbient.level_profiles || {})
+      : {}
+    const directProfiles = updates.levelProfiles ?? updates.level_profiles
+    const mergedProfiles = mergeWechatyAmbientLevelProfiles(
+      currentAmbient.levelProfiles,
+      directProfiles !== undefined ? directProfiles : rawAmbientProfiles,
+    )
+    next.ambientReply = normalizeWechatyAmbientReplyConfig({
+      ...currentAmbient,
+      ...(rawAmbient && typeof rawAmbient === 'object' ? rawAmbient : {}),
+      ...(rawAmbient && typeof rawAmbient === 'object' && Object.prototype.hasOwnProperty.call(rawAmbient, 'activity_level') ? { activityLevel: rawAmbient.activity_level } : {}),
+      ...(rawAmbient && typeof rawAmbient === 'object' && Object.prototype.hasOwnProperty.call(rawAmbient, 'ambient_queue_ttl_seconds') ? { ambientQueueTtlSeconds: rawAmbient.ambient_queue_ttl_seconds } : {}),
+      ...(Object.prototype.hasOwnProperty.call(updates, 'activityLevel') ? { activityLevel: updates.activityLevel } : {}),
+      ...(Object.prototype.hasOwnProperty.call(updates, 'activity_level') ? { activity_level: updates.activity_level } : {}),
+      levelProfiles: mergedProfiles,
+    })
   }
   if (
     Object.prototype.hasOwnProperty.call(updates, 'offlineQrNotify')

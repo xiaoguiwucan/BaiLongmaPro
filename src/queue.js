@@ -92,8 +92,23 @@ export function pushMessage(rawFromId, content, channel = 'TUI', meta = {}) {
   interruptCallback?.(entry)
 }
 
-export function popMessage() {
-  return queues.user.shift() || queues.background.shift() || null
+function takeFirstMatching(queue, predicate = null) {
+  if (typeof predicate !== 'function') return queue.shift() || null
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i]
+    let ok = false
+    try { ok = !!predicate(item) } catch { ok = false }
+    if (!ok) continue
+    queue.splice(i, 1)
+    return item
+  }
+  return null
+}
+
+export function popMessage(predicate = null) {
+  const userMsg = takeFirstMatching(queues.user, predicate)
+  if (userMsg) return userMsg
+  return takeFirstMatching(queues.background, predicate)
 }
 
 export function drainUserMessages(predicate = () => true, max = 0) {
@@ -126,6 +141,31 @@ export function hasMessages() {
 
 export function hasUserMessages() {
   return queues.user.length > 0
+}
+
+export function hasQueuedMessage(predicate = null) {
+  if (typeof predicate !== 'function') return hasMessages()
+  for (const queue of [queues.user, queues.background]) {
+    for (const item of queue) {
+      try {
+        if (predicate(item)) return true
+      } catch {}
+    }
+  }
+  return false
+}
+
+export function countQueuedMessages(predicate = null) {
+  if (typeof predicate !== 'function') return queues.user.length + queues.background.length
+  let count = 0
+  for (const queue of [queues.user, queues.background]) {
+    for (const item of queue) {
+      try {
+        if (predicate(item)) count += 1
+      } catch {}
+    }
+  }
+  return count
 }
 
 export function getQueueSnapshot() {

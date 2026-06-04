@@ -1941,6 +1941,23 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             }
           }
           if (
+            Object.prototype.hasOwnProperty.call(body, 'concurrency_limit')
+            || Object.prototype.hasOwnProperty.call(body, 'concurrencyLimit')
+            || Object.prototype.hasOwnProperty.call(body, 'reply_concurrency_limit')
+            || Object.prototype.hasOwnProperty.call(body, 'replyConcurrencyLimit')
+          ) {
+            updates.concurrencyLimit = body.concurrency_limit
+              ?? body.concurrencyLimit
+              ?? body.reply_concurrency_limit
+              ?? body.replyConcurrencyLimit
+          }
+          if (
+            Object.prototype.hasOwnProperty.call(body, 'ambient_reply')
+            || Object.prototype.hasOwnProperty.call(body, 'ambientReply')
+          ) {
+            updates.ambientReply = body.ambient_reply ?? body.ambientReply
+          }
+          if (
             Object.prototype.hasOwnProperty.call(body, 'offline_qr_notify')
             || Object.prototype.hasOwnProperty.call(body, 'offlineQrNotify')
             || Object.prototype.hasOwnProperty.call(body, 'offline_qr_notify_enabled')

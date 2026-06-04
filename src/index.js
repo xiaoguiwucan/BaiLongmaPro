@@ -1,4 +1,4 @@
-import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.js'
+import { config, getMinimaxKey as _getMinimaxKey, getSecurity, getWechatyDutyGroupConfig } from './config.js'
 import { callLLM, isLikelyProgressOnlySendMessageContent } from './llm.js'
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { runRecognizer } from './memory/recognizer.js'
@@ -10,7 +10,7 @@ import { startConsolidationLoop } from './memory/consolidation-loop.js'
 import { gatherContext, formatExtraContext } from './context/gatherer.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, markReminderFired, advanceReminderDueAt, getNextPendingReminder, getMemoryCount, getRecentConversationTimeline, loadFocusStack, saveFocusStack } from './db.js'
 import { calculateNextDueAt, autoSpeakForVoiceReply } from './capabilities/executor.js'
-import { popMessage, drainUserMessages, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage, pushMessage } from './queue.js'
+import { popMessage, drainUserMessages, hasMessages, hasQueuedMessage, countQueuedMessages, getQueueSnapshot, setInterruptCallback, requeueMessage, pushMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
 import { emitEvent, emitUICommand, addActiveUICard, hasACUIClient, setStickyEvent, clearStickyEvent } from './events.js'
@@ -24,6 +24,7 @@ import { seedSandboxOnce, seedMusicOnce, rescueDataFromInstallDir } from './path
 import { ensureSkillMemories } from './memory/seed-skills.js'
 import { loadInstalledTools } from './capabilities/marketplace/index.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
+import { noteWechatAmbientQueueExpired, updateWechatyDutyGroupWorkerState } from './social/wechaty-duty-group.js'
 import { startSocialConnectors } from './social/index.js'
 import { buildHotspotRuntimeContext, buildHotspotPanelStateContext } from './hotspots.js'
 import { buildPersonCardRuntimeContext, buildPersonCardPanelStateContext } from './person-cards.js'
@@ -379,7 +380,7 @@ function isWechatyDutyGroupMentionTurn(msg = null) {
 }
 
 function isWechatyDutyGroupReplyTurn(msg = null) {
-  return isWechatyDutyGroupTurn(msg) && (msg?.social?.mentioned_self === true || msg?.social?.reply_trigger === 'active_reply')
+  return isWechatyDutyGroupTurn(msg) && (msg?.social?.wechat_worker === true || msg?.social?.mentioned_self === true || msg?.social?.ambient_triggered === true)
 }
 
 function shouldStopAfterWechatyGroupSendMessage({ args = {} } = {}) {
@@ -903,13 +904,15 @@ function buildSystemEnv(msg) {
   return blocks.filter(Boolean).join('\n\n')
 }
 
-async function runTurn(input, label, msg = null) {
+async function runTurn(input, label, msg = null, options = {}) {
   const sessionRef = newSessionRef()
   const isTick = !msg
   if (isTick) state.tickCounter += 1
   const priority = getProcessPriority(msg)
   const fastUserPath = isFastUserMessage(msg)
-  const controller = new AbortController()
+  const controller = options.controller || new AbortController()
+  const useGlobalExecution = options.globalExecution !== false
+  const markAbortedTick = options.markAbortedTick !== false
   let llmResult = null
   let toolCallLog = []
   let voiceSentenceEmitter = null
@@ -920,12 +923,14 @@ async function runTurn(input, label, msg = null) {
 
   // User messages are written to conversations at the pushMessage stage (recorded on arrival) — do not write them again here.
   try {
-    beginExecution({
-      priority,
-      kind: isTick ? 'tick' : (fastUserPath ? 'user' : 'background'),
-      label,
-      controller,
-    })
+    if (useGlobalExecution) {
+      beginExecution({
+        priority,
+        kind: isTick ? 'tick' : (fastUserPath ? 'user' : 'background'),
+        label,
+        controller,
+      })
+    }
 
     if (isTick) ensureStartupSelfCheckState()
 
@@ -1059,7 +1064,10 @@ async function runTurn(input, label, msg = null) {
       directions.unshift('Current turn is a real-time external user message. Understand it quickly and reply directly with send_message before doing slow tools or deep context gathering. Use heavier tools only when the reply depends on them. During execution, whenever there is meaningful progress or a useful finding, send_message to keep the user in the loop. Do not ask for permission for actions you can safely perform; act, and speak when there is something worth saying.')
     }
     if (isWechatyDutyGroupReplyTurn(msg)) {
-      directions.unshift('微信群回复硬规则：本轮只发送一条真正给群友看的最终回复。不要发送“已回复/回复完毕/无需补充/本轮结束/已经发送”这类内部状态；不要把工具执行协议、结束语或自检语发到群里。不要把“好的/稍等/马上/我来整理/接上”当最终回复；如果用户要求续写、长文、总结、故事、报告或文件格式，必须同一轮直接产出内容。回复应直接回答当前群友这条消息。')
+      const ambientRule = msg?.social?.suppress_mention === true
+        ? '本轮是微信群自由接话：默认不要 @ 任何人，像群友自然接一句；只发送一条真正给群里看的最终回复。'
+        : '本轮是微信群 @ 必回：必须直接回答 @ 后的真实问题，发送层会 @ 真实提问人。'
+      directions.unshift(`${ambientRule} 不要发送“已回复/回复完毕/无需补充/本轮结束/已经发送”这类内部状态；不要把工具执行协议、结束语或自检语发到群里。不要把“好的/稍等/马上/我来整理/接上”当最终回复；如果用户要求续写、长文、总结、故事、报告或文件格式，必须同一轮直接产出内容。`)
     }
     if (isVoiceChannel(msg?.channel)) {
       directions.unshift('IMPORTANT voice reply protocol: this is a direct voice conversation. Reply in your normal assistant message content immediately. Do NOT call send_message for this local voice channel unless a separate external/social delivery is explicitly required. The runtime will show and speak your assistant message automatically.')
@@ -1326,14 +1334,14 @@ async function runTurn(input, label, msg = null) {
       return
     }
   } finally {
-    clearExecution(controller)
+    if (useGlobalExecution) clearExecution(controller)
   }
 
   if (llmResult.aborted) {
     // WeChat-style interruption: discard partial output; the next round will naturally pick up this context from conversationWindow.
     // Mark this tick as aborted so onTick's finally block skips tick decrement and exploration advance.
     console.log('[system] Current processing interrupted by new message — partial output discarded')
-    lastTickAborted = true
+    if (markAbortedTick) lastTickAborted = true
     return
   }
 
@@ -1534,18 +1542,24 @@ let currentTimer = null  // timer for the next pending tick; can be cleared by p
 
 // 把 runTurn 用 watchdog 包一层：超时 → 强 abort + reject，让 onTick 的 finally 能跑、
 // processing 清掉。runTurn 内部那个永远不 resolve 的 promise 留在后台，最终被 GC。
-async function runTurnWithWatchdog(input, label, msg) {
+async function runTurnWithWatchdog(input, label, msg, options = {}) {
   let timer = null
   const startedAt = Date.now()
+  const controller = options.controller || new AbortController()
+  const useGlobalExecution = options.globalExecution !== false
   const watchdog = new Promise((_, reject) => {
     timer = setTimeout(() => {
-      const stuckLabel = currentExecution?.label || label
-      const elapsedS = currentExecution ? Math.round((Date.now() - currentExecution.startedAt) / 1000) : null
-      console.error(`[watchdog] runTurn 卡死 ${RUN_TURN_WATCHDOG_MS / 1000}s 未返回 (label=${stuckLabel}, elapsed=${elapsedS}s)，强制 abort`)
-      try { currentAbortController?.abort?.('watchdog timeout') } catch {}
-      // 立即清掉全局 execution 引用，避免后续 message 进来还 abort 同一个 controller
-      currentAbortController = null
-      currentExecution = null
+      const stuckLabel = useGlobalExecution ? (currentExecution?.label || label) : label
+      const elapsedS = useGlobalExecution && currentExecution
+        ? Math.round((Date.now() - currentExecution.startedAt) / 1000)
+        : Math.round((Date.now() - startedAt) / 1000)
+      console.error(`[watchdog] runTurn 卡死 ${RUN_TURN_WATCHDOG_MS / 1000}s 未返回 (label=${stuckLabel}, elapsed=${elapsedS}s${useGlobalExecution ? '' : ', worker=true'})，强制 abort`)
+      try { controller.abort?.('watchdog timeout') } catch {}
+      if (useGlobalExecution) {
+        // 立即清掉全局 execution 引用，避免后续 message 进来还 abort 同一个 controller
+        currentAbortController = null
+        currentExecution = null
+      }
       try { emitEvent('error', { label: 'watchdog', error: `runTurn stuck > ${RUN_TURN_WATCHDOG_MS / 1000}s` }) } catch {}
       const err = new Error('runTurn watchdog timeout')
       err.name = 'WatchdogTimeoutError'
@@ -1553,7 +1567,7 @@ async function runTurnWithWatchdog(input, label, msg) {
     }, RUN_TURN_WATCHDOG_MS)
   })
   try {
-    await Promise.race([runTurn(input, label, msg), watchdog])
+    await Promise.race([runTurn(input, label, msg, { ...options, controller }), watchdog])
   } finally {
     if (timer) clearTimeout(timer)
     try {
@@ -1568,18 +1582,168 @@ async function runTurnWithWatchdog(input, label, msg) {
 }
 
 
-function isParallelWechatyDutyGroupMessage(msg) {
+function isWechatyDutyGroupWorkerMessage(msg) {
   return !!msg
     && msg.queueName === 'user'
-    && msg.channel === 'WECHAT_CLAWBOT_GROUP'
     && msg.social?.platform === 'wechaty-duty-group'
+    && (
+      msg.social?.wechat_worker === true
+      || msg.social?.mentioned_self === true
+      || msg.social?.ambient_triggered === true
+    )
     && msg.noPreempt === true
 }
 
-function getParallelWechatLimit() {
-  const raw = Number(process.env.BAILONGMA_WECHAT_PARALLEL || 3)
-  if (!Number.isFinite(raw)) return 3
-  return Math.min(5, Math.max(1, Math.floor(raw)))
+function getWechatyDutyGroupWorkerKind(msg) {
+  const kind = String(msg?.social?.wechat_worker_kind || '').trim()
+  if (kind === 'ambient') return 'ambient'
+  if (kind === 'explicit_mention') return 'explicit_mention'
+  if (msg?.social?.ambient_triggered === true && msg?.social?.mentioned_self !== true) return 'ambient'
+  return 'explicit_mention'
+}
+
+function isWechatyDutyGroupMentionWorkerMessage(msg) {
+  return isWechatyDutyGroupWorkerMessage(msg) && getWechatyDutyGroupWorkerKind(msg) === 'explicit_mention'
+}
+
+function isWechatyDutyGroupAmbientWorkerMessage(msg) {
+  return isWechatyDutyGroupWorkerMessage(msg) && getWechatyDutyGroupWorkerKind(msg) === 'ambient'
+}
+
+function isWechatyAmbientWorkerExpired(msg) {
+  if (!isWechatyDutyGroupAmbientWorkerMessage(msg)) return false
+  const queuedAt = Number(msg?.social?.ambient_queued_at_ms || 0)
+  if (!Number.isFinite(queuedAt) || queuedAt <= 0) return false
+  let ttlSeconds = Number(msg?.social?.ambient_queue_ttl_seconds || 0)
+  if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+    try {
+      ttlSeconds = Number(getWechatyDutyGroupConfig().ambientReply?.ambientQueueTtlSeconds || 120)
+    } catch {
+      ttlSeconds = 120
+    }
+  }
+  return Date.now() - queuedAt > Math.max(10, ttlSeconds) * 1000
+}
+
+function getWechatyDutyGroupWorkerLimit() {
+  let raw = 6
+  try {
+    raw = Number(getWechatyDutyGroupConfig().concurrencyLimit || 6)
+  } catch {}
+  if (!Number.isFinite(raw)) return 6
+  return Math.min(20, Math.max(1, Math.floor(raw)))
+}
+
+let wechatyDutyWorkerActive = 0
+let wechatyDutyWorkerActiveMention = 0
+let wechatyDutyWorkerActiveAmbient = 0
+let wechatyDutyWorkerWakeScheduled = false
+let wechatyDutyWorkerSeq = 0
+
+function getWechatyDutyWorkerState(extra = {}) {
+  const state = {
+    active: wechatyDutyWorkerActive,
+    activeMention: wechatyDutyWorkerActiveMention,
+    activeAmbient: wechatyDutyWorkerActiveAmbient,
+    limit: getWechatyDutyGroupWorkerLimit(),
+    pendingMention: countQueuedMessages(isWechatyDutyGroupMentionWorkerMessage),
+    pendingAmbient: countQueuedMessages(isWechatyDutyGroupAmbientWorkerMessage),
+    ...extra,
+  }
+  updateWechatyDutyGroupWorkerState(state)
+  return state
+}
+
+function emitWechatyDutyWorkerState(event, extra = {}) {
+  try {
+    emitEvent(event, getWechatyDutyWorkerState(extra))
+  } catch {}
+}
+
+async function runWechatyDutyGroupWorkerMessage(msg, workerId, kind = 'explicit_mention') {
+  const label = `WECHAT worker #${workerId} from ${msg.fromId}`
+  console.log(`[WechatyWorker] start #${workerId}; kind=${kind}; active=${wechatyDutyWorkerActive}/${getWechatyDutyGroupWorkerLimit()} from=${msg.fromId}`)
+  emitWechatyDutyWorkerState('wechat_parallel_worker_started', { workerId, fromId: msg.fromId, kind })
+  try {
+    await runTurnWithWatchdog(msg.raw, label, msg, {
+      globalExecution: false,
+      markAbortedTick: false,
+    })
+  } catch (err) {
+    if (err?.name === 'WatchdogTimeoutError') {
+      console.error(`[WechatyWorker] #${workerId} watchdog timeout: ${err.message}`)
+    } else {
+      console.error(`[WechatyWorker] #${workerId} failed:`, err?.stack || err?.message || err)
+    }
+  } finally {
+    wechatyDutyWorkerActive = Math.max(0, wechatyDutyWorkerActive - 1)
+    if (kind === 'ambient') wechatyDutyWorkerActiveAmbient = Math.max(0, wechatyDutyWorkerActiveAmbient - 1)
+    else wechatyDutyWorkerActiveMention = Math.max(0, wechatyDutyWorkerActiveMention - 1)
+    emitWechatyDutyWorkerState('wechat_parallel_worker_finished', { workerId, fromId: msg.fromId, kind })
+    scheduleWechatyDutyGroupWorkers('worker-finished')
+    scheduleNextTick()
+  }
+}
+
+function takeNextWechatyDutyGroupWorkerMessage() {
+  const [mention] = drainUserMessages(isWechatyDutyGroupMentionWorkerMessage, 1)
+  if (mention) return mention
+  while (true) {
+    const [ambient] = drainUserMessages(isWechatyDutyGroupAmbientWorkerMessage, 1)
+    if (!ambient) return null
+    if (isWechatyAmbientWorkerExpired(ambient)) {
+      noteWechatAmbientQueueExpired(ambient)
+      emitWechatyDutyWorkerState('wechat_parallel_ambient_expired', { fromId: ambient.fromId })
+      continue
+    }
+    return ambient
+  }
+}
+
+function startWechatyDutyGroupWorkers(reason = '') {
+  const limit = getWechatyDutyGroupWorkerLimit()
+  let started = 0
+  while (wechatyDutyWorkerActive < limit) {
+    const msg = takeNextWechatyDutyGroupWorkerMessage()
+    if (!msg) break
+    const kind = getWechatyDutyGroupWorkerKind(msg)
+    wechatyDutyWorkerActive += 1
+    if (kind === 'ambient') wechatyDutyWorkerActiveAmbient += 1
+    else wechatyDutyWorkerActiveMention += 1
+    started += 1
+    const workerId = ++wechatyDutyWorkerSeq
+    runWechatyDutyGroupWorkerMessage(msg, workerId, kind).catch(err => {
+      console.error(`[WechatyWorker] detached failure #${workerId}:`, err?.stack || err?.message || err)
+    })
+  }
+  if (started > 0) {
+    console.log(`[WechatyWorker] launched ${started} worker(s); active=${wechatyDutyWorkerActive}/${limit}${reason ? ` reason=${reason}` : ''}`)
+    emitWechatyDutyWorkerState('wechat_parallel_pool', { started, reason })
+  } else {
+    getWechatyDutyWorkerState({ reason })
+  }
+  return started
+}
+
+function scheduleWechatyDutyGroupWorkers(reason = '') {
+  if (wechatyDutyWorkerWakeScheduled) return
+  wechatyDutyWorkerWakeScheduled = true
+  setTimeout(() => {
+    wechatyDutyWorkerWakeScheduled = false
+    startWechatyDutyGroupWorkers(reason)
+  }, 0)
+}
+
+function hasPendingWechatyDutyWorkerMessages() {
+  return hasQueuedMessage(isWechatyDutyGroupWorkerMessage)
+}
+
+function hasPendingNonWechatyDutyMessages() {
+  return hasQueuedMessage(msg => !isWechatyDutyGroupWorkerMessage(msg))
+}
+
+function hasPendingNonWechatyDutyUserMessages() {
+  return hasQueuedMessage(msg => msg?.queueName === 'user' && !isWechatyDutyGroupWorkerMessage(msg))
 }
 
 async function onTick() {
@@ -1591,27 +1755,19 @@ async function onTick() {
 
   try {
     enqueueDueReminders()
+    startWechatyDutyGroupWorkers('main-loop')
     if (hasMessages()) {
-      const msg = popMessage()
-      if (isParallelWechatyDutyGroupMessage(msg)) {
-        const limit = getParallelWechatLimit()
-        const batch = [msg, ...drainUserMessages(isParallelWechatyDutyGroupMessage, limit - 1)]
-        if (batch.length > 1) {
-          console.log(`[WechatyQueue] 并行处理 ${batch.length} 条群 @ 消息（上限 ${limit}）`)
-          emitEvent('wechat_parallel_batch', { count: batch.length, limit })
-          await Promise.allSettled(batch.map((item, index) => runTurnWithWatchdog(
-            item.raw,
-            `L1 wechat parallel #${index + 1} from ${item.fromId}`,
-            item,
-          )))
-        } else {
-          await runTurnWithWatchdog(msg.raw, `L1 message from ${msg.fromId}`, msg)
-        }
-      } else {
+      const msg = popMessage(item => !isWechatyDutyGroupWorkerMessage(item))
+      if (msg) {
         const lane = msg.queueName === 'background' ? 'BG' : 'L1'
         await runTurnWithWatchdog(msg.raw, `${lane} message from ${msg.fromId}`, msg)
+      } else if (wechatyDutyWorkerActive > 0 || hasPendingWechatyDutyWorkerMessages()) {
+        // The WeChat worker pool owns these queued messages. Do not run an L2
+        // tick just because the main loop has nothing else to do.
+        return
       }
     } else {
+      if (wechatyDutyWorkerActive > 0) return
       autoTick = true
       selfCheckActiveAtStart = !!state.startupSelfCheck?.active
       const tick = formatTick()
@@ -1648,9 +1804,12 @@ function scheduleNextTick() {
   if (currentTimer) { clearTimeout(currentTimer); currentTimer = null }
 
   enqueueDueReminders()
+  startWechatyDutyGroupWorkers('scheduler')
 
-  const hasPending = hasMessages()
-  const hasPendingUser = hasUserMessages()
+  const hasPendingWechat = hasPendingWechatyDutyWorkerMessages()
+  const hasPendingNonWechat = hasPendingNonWechatyDutyMessages()
+  const hasPendingNonWechatUser = hasPendingNonWechatyDutyUserMessages()
+  const wechatLimit = getWechatyDutyGroupWorkerLimit()
   const queueSnapshot = getQueueSnapshot()
   const rateLimited = isRateLimited()
   const customMs = getCustomIntervalMs()
@@ -1659,12 +1818,18 @@ function scheduleNextTick() {
 
   let interval
   let label
-  if (hasPendingUser) {
+  if (hasPendingNonWechatUser) {
     interval = 0
     label = 'immediate (user message pending)'
-  } else if (hasPending) {
+  } else if (hasPendingNonWechat) {
     interval = 0
     label = 'immediate (background message pending)'
+  } else if (hasPendingWechat) {
+    interval = wechatyDutyWorkerActive >= wechatLimit ? 1000 : 100
+    label = `wechat worker pool ${wechatyDutyWorkerActive}/${wechatLimit}`
+  } else if (wechatyDutyWorkerActive > 0) {
+    interval = 1000
+    label = `wechat workers active ${wechatyDutyWorkerActive}/${wechatLimit}`
   } else if (rateLimited) {
     interval = getTickInterval(config.tickInterval)
     label = `rate-limited (${interval / 1000}s)`
@@ -1740,6 +1905,9 @@ async function startConsciousnessLoop({ runImmediateTick = true } = {}) {
 
   // Register interrupt callback: when a new message arrives, interrupt the current LLM call and trigger the next tick immediately (don't wait for the timer)
   setInterruptCallback((entry) => {
+    if (isWechatyDutyGroupWorkerMessage(entry)) {
+      scheduleWechatyDutyGroupWorkers('message-arrived')
+    }
     if (currentAbortController && shouldPreemptFor(entry)) {
       console.log(`[system] Higher-priority message arrived — interrupting current processing: ${entry.fromId} (${entry.queueName})`)
       emitEvent('processing_preempted', {

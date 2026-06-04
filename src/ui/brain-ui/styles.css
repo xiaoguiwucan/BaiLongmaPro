@@ -6072,6 +6072,207 @@ body.person-card-mode .person-card-panel,
   flex-wrap: wrap;
   flex: 0 0 auto;
 }
+.wechaty-concurrency-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, auto);
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(87,214,255,0.18);
+  border-radius: 14px;
+  background: rgba(87,214,255,0.045);
+}
+.wechaty-concurrency-controls {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.wechaty-concurrency-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 120px;
+  color: var(--ink2);
+  font-size: 11px;
+}
+.wechaty-concurrency-controls .settings-select {
+  width: 120px;
+}
+.wechaty-concurrency-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(114,255,195,0.24);
+  border-radius: 999px;
+  color: #aafbdd;
+  background: rgba(114,255,195,0.08);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  white-space: normal;
+  max-width: 420px;
+  line-height: 1.45;
+}
+.wechaty-ambient-card,
+.wechaty-ambient-profile-card,
+.wechaty-ambient-rules-card,
+.wechaty-ambient-last-card {
+  margin: 0 0 12px;
+  padding: 13px 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.028);
+}
+.wechaty-ambient-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(87,214,255,0.24);
+  border-radius: 999px;
+  color: #bdefff;
+  background: rgba(87,214,255,0.08);
+  font-size: 11px;
+  font-weight: 700;
+}
+.wechaty-ambient-levels {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(92px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+.wechaty-ambient-levels label {
+  position: relative;
+  min-height: 38px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.035);
+  cursor: pointer;
+}
+.wechaty-ambient-levels input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.wechaty-ambient-levels span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ink2);
+  font-size: 12px;
+  font-weight: 700;
+}
+.wechaty-ambient-levels input:checked + span {
+  color: #e8fbff;
+  background: rgba(87,214,255,0.16);
+  box-shadow: inset 0 0 0 1px rgba(87,214,255,0.28);
+}
+.wechaty-ambient-summary {
+  margin: 8px 0 10px;
+  color: var(--ink2);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.wechaty-ambient-ttl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+  color: var(--ink2);
+  font-size: 11px;
+}
+.wechaty-ambient-profile-editor {
+  display: grid;
+  gap: 9px;
+}
+.wechaty-ambient-profile-row {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.8fr) repeat(4, minmax(112px, 1fr));
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.025);
+}
+.wechaty-ambient-profile-name {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  padding-bottom: 10px;
+}
+.wechaty-ambient-profile-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--ink2);
+  font-size: 11px;
+}
+.wechaty-ambient-profile-row .settings-input,
+.wechaty-ambient-ttl .settings-input {
+  width: 100%;
+  min-width: 96px;
+}
+.wechaty-ambient-rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.wechaty-ambient-rule-table {
+  min-width: 0;
+}
+.wechaty-ambient-rule-table b {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--ink);
+  font-size: 12px;
+}
+.wechaty-ambient-rule-table table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--ink2);
+  font-size: 11px;
+}
+.wechaty-ambient-rule-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  line-height: 1.45;
+  vertical-align: top;
+}
+.wechaty-ambient-rule-table td:last-child {
+  width: 118px;
+  color: #aafbdd;
+  text-align: right;
+  white-space: nowrap;
+}
+.wechaty-ambient-last {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 9px;
+  color: var(--ink2);
+  font-size: 12px;
+}
+.wechaty-ambient-last span {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.025);
+  overflow-wrap: anywhere;
+}
+.wechaty-ambient-last b {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ink);
+  font-size: 10px;
+  text-transform: uppercase;
+}
 .wechaty-offline-notify-card {
   margin: 0 0 12px;
   padding: 13px 14px;
@@ -6177,6 +6378,23 @@ body.person-card-mode .person-card-panel,
   }
   .wechaty-offline-notify-controls {
     grid-template-columns: 1fr;
+  }
+  .wechaty-concurrency-card {
+    grid-template-columns: 1fr;
+  }
+  .wechaty-concurrency-controls {
+    justify-content: flex-start;
+  }
+  .wechaty-ambient-levels,
+  .wechaty-ambient-rules,
+  .wechaty-ambient-last {
+    grid-template-columns: 1fr;
+  }
+  .wechaty-ambient-profile-row {
+    grid-template-columns: 1fr;
+  }
+  .wechaty-ambient-profile-name {
+    padding-bottom: 0;
   }
   .wechaty-subsection-head,
   .wechaty-login-card,

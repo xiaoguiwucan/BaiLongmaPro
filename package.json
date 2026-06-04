@@ -24,6 +24,7 @@
     "smoke:social": "node scripts/run-electron-node.mjs scripts/smoke-social.mjs",
     "test:wechat-guard": "node scripts/test-wechat-command-guard.mjs",
     "test:wechat-memory": "node scripts/test-wechat-memory-extractor.mjs",
+    "test:wechat-ambient-reply": "node scripts/test-wechat-ambient-reply.mjs",
     "test:local-wechat-memory": "node scripts/run-electron-node.mjs scripts/test-local-wechat-memory.mjs",
     "test:social-targets": "node scripts/test-social-targets.mjs",
     "test:wechat-group-archive-config": "node scripts/run-electron-node.mjs scripts/test-wechat-group-archive-config.mjs",

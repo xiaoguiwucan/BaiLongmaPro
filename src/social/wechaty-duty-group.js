@@ -2,7 +2,7 @@ import qrcodeTerminal from 'qrcode-terminal'
 import { WechatyBuilder, ScanStatus } from 'wechaty'
 import { PuppetWechat4u } from 'wechaty-puppet-wechat4u'
 import { FileBox } from 'file-box'
-import { archiveWeChatGroupMessage, buildWeChatGroupCommandPrompt, formatGroupLine, isGroupSummaryRequest, makeWeChatGroupExternalId, WECHAT_GROUP_CHANNEL } from './wechat-groups.js'
+import { archiveWeChatGroupMessage, buildWeChatGroupCommandPrompt, formatGroupLine, getRecentWeChatGroupMessages, isGroupSummaryRequest, makeWeChatGroupExternalId, WECHAT_GROUP_CHANNEL } from './wechat-groups.js'
 import { getWechatyDutyGroupConfig, getWeChatGroupArchiveConfig, getWeChatGroupDigestConfig, setWechatyDutyGroupConfig, setWechatyDutyGroupRuntime } from '../config.js'
 import { recordWeChatGroupMessage, recordWeChatGroupAssistantReply, recordWeChatGroupExplicitMemories } from './wechat-group-memory.js'
 import { buildWeChatGroupStatsDigest, getWeChatGroupStats, isWeChatInternalIdLike, listWeChatGroupMembers, normalizeWechatMessageType, normalizeWeChatGroupDisplayText, recordWeChatGroupActivity, upsertWeChatGroupMemberName } from './wechat-group-stats.js'
@@ -14,6 +14,7 @@ import { isWechatReplyGeneratedFilePath } from './wechat-file-reply.js'
 import { checkWeChatGroupCommandSafety } from './wechat-command-guard.js'
 import { searchPublicImages } from './public-image-search.js'
 import { extractWeChatQuoteContext } from './wechat-quote-context.js'
+import { buildWechatExplicitMentionDecision, evaluateWechatAmbientReply, getWeChatAmbientReplyRules } from './wechat-ambient-reply.js'
 import { getClawbotStatus, sendClawbotSelfNotification } from './wechat-clawbot.js'
 import { analyzeWechatVideoMessage, isWechatVideoAnalysisIntent, isWechatVideoMessageType } from './wechat-video-analysis-skill.js'
 import { paths } from '../paths.js'
@@ -46,6 +47,7 @@ const WECHAT_MEDIA_WAIT_MS = 3200
 const WECHAT_VIDEO_REFERENCE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
 const WECHAT_IMAGE_REPLY_VISION_ATTEMPTS = 3
 const WECHAT_IMAGE_REPLY_VISION_INTERVAL_MS = 5000
+const WECHAT_IMAGE_REPLY_REVIEW_TIMEOUT_MS = 4500
 
 let bot = null
 let status = 'idle' // idle | starting | qr_ready | logged_in | connected | error
@@ -82,33 +84,16 @@ let lastClawbotQrNotifyResult = ''
 const memberNameRefreshAt = new Map()
 const recentWechatUserMessages = new Map()
 const recentWechatGroupVideos = new Map()
-const activeReplyLastAtByGroup = new Map()
-
-function getWechatyActiveReplyConfig() {
-  const cfg = getWechatyDutyGroupConfig().activeReply || {}
-  const minInterval = Number(cfg.minIntervalSeconds ?? cfg.min_interval_seconds)
-  return {
-    enabled: cfg.enabled === true,
-    minIntervalSeconds: Number.isFinite(minInterval) ? Math.min(3600, Math.max(10, Math.round(minInterval))) : 60,
-  }
-}
-
-function shouldTriggerWechatyGroupReply({ mentionedSelf = false, isSelf = false, groupId = '', text = '' } = {}) {
-  if (mentionedSelf) return { ok: true, reason: 'mention' }
-  const activeReply = getWechatyActiveReplyConfig()
-  if (!activeReply.enabled) return { ok: false, reason: 'active_reply_disabled' }
-  if (isSelf) return { ok: false, reason: 'self_message' }
-  const cleanText = String(text || '').trim()
-  if (!cleanText) return { ok: false, reason: 'empty_text' }
-  const key = String(groupId || '').trim()
-  const now = Date.now()
-  const minIntervalMs = activeReply.minIntervalSeconds * 1000
-  const lastAt = Number(activeReplyLastAtByGroup.get(key) || 0)
-  if (lastAt && now - lastAt < minIntervalMs) {
-    return { ok: false, reason: 'active_reply_cooldown', cooldownRemainingMs: minIntervalMs - (now - lastAt) }
-  }
-  activeReplyLastAtByGroup.set(key, now)
-  return { ok: true, reason: 'active_reply' }
+const ambientReplyStateByGroup = new Map()
+let lastAmbientReplyDecision = null
+let lastAmbientImageDecision = null
+let wechatyDutyWorkerStateSnapshot = {
+  limit: getWechatyDutyGroupConfig().concurrencyLimit || 6,
+  active: 0,
+  activeMention: 0,
+  activeAmbient: 0,
+  pendingMention: 0,
+  pendingAmbient: 0,
 }
 
 function isWechatyBlockedSender(senderId = '') {
@@ -386,6 +371,21 @@ function getLatestRecentWechatMediaId({ groupId = '', senderId = '', senderName 
   return 0
 }
 
+function rememberAmbientImageDecision(decision = {}) {
+  lastAmbientImageDecision = {
+    group_name: decision.groupName || decision.group_name || '',
+    sender_name: decision.senderName || decision.sender_name || '',
+    media_id: Number(decision.mediaId || decision.media_id || 0) || 0,
+    vision_status: decision.visionStatus || decision.vision_status || '',
+    retry_count: Number(decision.retryCount ?? decision.retry_count ?? 0) || 0,
+    triggered: decision.triggered === true,
+    score: Number(decision.score || 0),
+    reasons: Array.isArray(decision.reasons) ? decision.reasons : [],
+    suppressions: Array.isArray(decision.suppressions) ? decision.suppressions : [],
+    timestamp: decision.timestamp || new Date().toISOString(),
+  }
+}
+
 function labelsFromWechatImageRow(row = {}) {
   try {
     const parsed = JSON.parse(row.labels_json || '[]')
@@ -421,6 +421,144 @@ function buildWechatImageReplyContext({ result = {}, item = {}, senderName = '',
     labels,
     quote_matched: !!quoteMatched,
     retry_count: Number(result.retryCount || result.retry_count || 0),
+    relevance_score: String(result.description || row.description || '').trim() ? (quoteMatched ? 80 : 40) : 0,
+    relevance_judge: 'rules',
+    relevance_reasons: [
+      String(result.description || row.description || '').trim() ? 'image_vision_done' : '',
+      quoteMatched ? 'quoted_image' : 'fresh_group_image',
+    ].filter(Boolean),
+  }
+}
+
+function parseJsonObjectFromText(text = '') {
+  const raw = String(text || '').trim()
+  if (!raw) return null
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/iu)
+  const value = (fenced?.[1] || raw).trim()
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {}
+  const start = value.indexOf('{')
+  const end = value.lastIndexOf('}')
+  if (start >= 0 && end > start) {
+    try {
+      const parsed = JSON.parse(value.slice(start, end + 1))
+      return parsed && typeof parsed === 'object' ? parsed : null
+    } catch {}
+  }
+  return null
+}
+
+function normalizeImageReviewStyle(style = '') {
+  const value = String(style || '').trim().toLowerCase()
+  return ['helpful', 'banter', 'short_comment', 'silent'].includes(value) ? value : 'short_comment'
+}
+
+function hasHardAmbientSuppression(decision = {}) {
+  const hard = new Set([
+    'self_message',
+    'sensitive_or_dangerous',
+    'image_content_sensitive',
+    'image_vision_not_ready_after_retries',
+    'min_interval',
+    'hourly_limit',
+    'consecutive_limit',
+    'guard_blocked_non_mention',
+    'admin_protection_non_mention',
+  ])
+  return (Array.isArray(decision.suppressions) ? decision.suppressions : []).some(id => hard.has(id))
+}
+
+function shouldReviewWechatImageAmbientDecision(decision = {}, imageContext = null) {
+  if (!imageContext?.media_id || !imageContext.description) return false
+  if (decision?.forced || decision?.kind === 'explicit_mention') return false
+  if (hasHardAmbientSuppression(decision)) return false
+  const score = Number(decision.score || 0)
+  const threshold = Number(decision.threshold || 0)
+  const reasons = new Set(Array.isArray(decision.reasons) ? decision.reasons : [])
+  const relevanceReasons = new Set(Array.isArray(imageContext.relevance_reasons) ? imageContext.relevance_reasons : [])
+  const hasStrongImageReason = reasons.has('image_context_relevant')
+    || relevanceReasons.has('quoted_image')
+    || relevanceReasons.has('image_caption_or_recent_context')
+    || relevanceReasons.has('image_content_natural_reply')
+  if (!hasStrongImageReason && score >= threshold) return true
+  return Math.abs(score - threshold) <= 15
+}
+
+async function reviewWechatImageAmbientDecision({ decision = {}, imageContext = null, groupExternalId = '', groupName = '', senderName = '', text = '' } = {}) {
+  if (!shouldReviewWechatImageAmbientDecision(decision, imageContext)) return decision
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort('image ambient review timeout'), WECHAT_IMAGE_REPLY_REVIEW_TIMEOUT_MS)
+  try {
+    const recent = groupExternalId
+      ? getRecentWeChatGroupMessages(groupExternalId, { limit: 10, hours: 1 }).slice(-8)
+      : []
+    const systemPrompt = [
+      '你是微信群机器人“自由接话”的图片接话复核器，只判断该不该主动接话。',
+      '必须只输出 JSON，不要输出解释、Markdown 或多余文字。',
+      'JSON 格式：{"should_reply":true/false,"style":"helpful|banter|short_comment|silent","reason":"不超过40字"}。',
+      '如果图片内容和最近群聊无关、像私人聊天、低信息晒图或会打断群聊，应 should_reply=false。',
+      '如果图片是报错/求助/文档/作业/截图、被引用、有人让看图，或明显是可自然接的梗，可 should_reply=true。',
+    ].join('\n')
+    const payload = {
+      group_name: groupName,
+      sender_name: senderName,
+      current_text: String(text || '').slice(0, 600),
+      recent_messages: recent.map(row => String(row?.content || '').replace(/\s+/g, ' ').slice(0, 160)),
+      image: {
+        sender_name: imageContext.sender_name || senderName || '',
+        description: String(imageContext.description || '').slice(0, 900),
+        labels: Array.isArray(imageContext.labels) ? imageContext.labels.slice(0, 12) : [],
+        relevance_reasons: Array.isArray(imageContext.relevance_reasons) ? imageContext.relevance_reasons.slice(0, 12) : [],
+      },
+      rule_decision: {
+        score: Number(decision.score || 0),
+        threshold: Number(decision.threshold || 0),
+        reasons: Array.isArray(decision.reasons) ? decision.reasons : [],
+        suppressions: Array.isArray(decision.suppressions) ? decision.suppressions : [],
+      },
+    }
+    const { callLLM } = await import('../llm.js')
+    const result = await callLLM({
+      systemPrompt,
+      message: JSON.stringify(payload),
+      temperature: 0,
+      topP: 0.1,
+      maxTokens: 120,
+      thinking: false,
+      tools: [],
+      maxToolRounds: 1,
+      suppressToolLogs: true,
+      signal: controller.signal,
+    })
+    const parsed = parseJsonObjectFromText(result?.content || '')
+    if (!parsed || typeof parsed.should_reply !== 'boolean') return decision
+    const review = {
+      should_reply: parsed.should_reply === true,
+      style: normalizeImageReviewStyle(parsed.style),
+      reason: String(parsed.reason || '').replace(/\s+/g, ' ').slice(0, 80),
+    }
+    decision.image_context = { ...(decision.image_context || imageContext), relevance_judge: 'llm_review', relevance_review: review }
+    decision.imageContext = decision.image_context
+    if (review.should_reply) {
+      if (!decision.reasons.includes('image_llm_review_reply')) decision.reasons.push('image_llm_review_reply')
+      decision.reasonDetails.push({ id: 'image_llm_review_reply', label: `图片接话复核建议接话：${review.reason || review.style}`, score: 0 })
+      decision.score = Math.max(Number(decision.score || 0), Number(decision.threshold || 0))
+      decision.triggered = !hasHardAmbientSuppression(decision)
+    } else {
+      if (!decision.suppressions.includes('image_llm_review_silent')) decision.suppressions.push('image_llm_review_silent')
+      decision.suppressionDetails.push({ id: 'image_llm_review_silent', label: `图片接话复核建议沉默：${review.reason || review.style}`, score: 0 })
+      decision.triggered = false
+    }
+    return decision
+  } catch (err) {
+    if (err?.name !== 'AbortError') {
+      console.warn(`[WechatImageReply] 图片接话复核失败，回退规则结果：${err?.message || err}`)
+    }
+    return decision
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -440,6 +578,48 @@ function buildWechatImageEnhancedText({ baseText = '', imageContext = {} } = {})
   const imageLine = description ? `刚刚${sender || '群友'}发了一张图片，图片内容：${description}` : ''
   const labelLine = labels.length ? `图片标签：${labels.join('、')}` : ''
   return [base, imageLine, labelLine].filter(Boolean).join('\n').trim()
+}
+
+function buildImageNotReadyDecision({ groupName = '', senderName = '', mediaId = 0, result = {}, mentionedSelf = false } = {}) {
+  const decision = {
+    triggered: false,
+    forced: mentionedSelf,
+    kind: mentionedSelf ? 'explicit_mention' : 'ambient',
+    score: 0,
+    threshold: 0,
+    activityLevel: getWechatyDutyGroupConfig().ambientReply?.activityLevel || 'normal',
+    reasons: [],
+    reasonDetails: [],
+    suppressions: ['image_vision_not_ready_after_retries'],
+    suppressionDetails: [{ id: 'image_vision_not_ready_after_retries', label: '图片三次查询后仍未解析完成，放弃本轮', score: 0 }],
+    groupName,
+    senderName,
+    timestamp: new Date().toISOString(),
+    image_context: {
+      media_id: Number(mediaId || result.mediaId || 0) || 0,
+      sender_name: senderName || '',
+      vision_status: result.vision_status || 'pending',
+      retry_count: Number(result.retryCount ?? result.retry_count ?? WECHAT_IMAGE_REPLY_VISION_ATTEMPTS) || WECHAT_IMAGE_REPLY_VISION_ATTEMPTS,
+      description: '',
+      labels: [],
+      quote_matched: false,
+      relevance_score: 0,
+      relevance_reasons: [],
+    },
+  }
+  rememberAmbientImageDecision({
+    groupName,
+    senderName,
+    mediaId: decision.image_context.media_id,
+    visionStatus: decision.image_context.vision_status,
+    retryCount: decision.image_context.retry_count,
+    triggered: false,
+    score: 0,
+    reasons: [],
+    suppressions: decision.suppressions,
+    timestamp: decision.timestamp,
+  })
+  return decision
 }
 
 async function prepareWechatImageReplyText({ groupId = '', groupName = '', senderId = '', senderName = '', mediaInfo = null, text = '', rawText = '', rawPayloadText = '', messageType = '', mentionedSelf = false } = {}) {
@@ -547,6 +727,86 @@ function makeWechatyGroupReplyTargetId(roomId = '', senderId = '', senderName = 
   const roomKey = encodeURIComponent(String(roomId || 'unknown-room').trim())
   const memberKey = encodeURIComponent(String(senderId || senderName || 'unknown-member').trim())
   return `wechaty:room:${roomKey}:member:${memberKey}`
+}
+
+function makeWechatyGroupRoomTargetId(roomId = '') {
+  const roomKey = encodeURIComponent(String(roomId || 'unknown-room').trim())
+  return `wechaty:room:${roomKey}`
+}
+
+function getAmbientReplyState(groupId = '') {
+  const key = String(groupId || '').trim() || 'unknown'
+  if (!ambientReplyStateByGroup.has(key)) {
+    ambientReplyStateByGroup.set(key, {
+      lastTriggeredAt: 0,
+      recentTriggeredAt: [],
+      consecutiveTriggered: 0,
+    })
+  }
+  return ambientReplyStateByGroup.get(key)
+}
+
+function rememberAmbientDecision(decision = {}) {
+  lastAmbientReplyDecision = {
+    group_name: decision.groupName || decision.group_name || '',
+    sender_name: decision.senderName || decision.sender_name || '',
+    score: Number(decision.score || 0),
+    threshold: Number(decision.threshold || 0),
+    triggered: decision.triggered === true,
+    forced: decision.forced === true,
+    kind: decision.kind || (decision.forced ? 'explicit_mention' : 'ambient'),
+    reasons: Array.isArray(decision.reasons) ? decision.reasons : [],
+    suppressions: Array.isArray(decision.suppressions) ? decision.suppressions : [],
+    expired: decision.expired === true,
+    timestamp: decision.timestamp || new Date().toISOString(),
+    activity_level: decision.activityLevel || decision.activity_level || 'normal',
+  }
+  return lastAmbientReplyDecision
+}
+
+function markAmbientObserved(groupId = '') {
+  const state = getAmbientReplyState(groupId)
+  state.consecutiveTriggered = 0
+}
+
+function markAmbientTriggered(groupId = '', now = Date.now()) {
+  const state = getAmbientReplyState(groupId)
+  state.lastTriggeredAt = now
+  state.recentTriggeredAt = (Array.isArray(state.recentTriggeredAt) ? state.recentTriggeredAt : [])
+    .filter(ts => now - Number(ts || 0) <= 3600_000)
+  state.recentTriggeredAt.push(now)
+  state.consecutiveTriggered = Number(state.consecutiveTriggered || 0) + 1
+}
+
+export function noteWechatAmbientQueueExpired(msg = {}) {
+  const social = msg?.social || {}
+  const decision = {
+    groupName: social.group_name || '',
+    senderName: social.sender_name || '',
+    score: Number(social.ambient_score || 0),
+    threshold: Number(social.ambient_threshold || 0),
+    triggered: false,
+    forced: false,
+    kind: 'ambient',
+    reasons: Array.isArray(social.ambient_reasons) ? social.ambient_reasons : [],
+    suppressions: ['ambient_queue_expired'],
+    expired: true,
+    activityLevel: social.ambient_level || 'normal',
+    timestamp: new Date().toISOString(),
+  }
+  console.log(`[WechatAmbient] 自由接话队列过期，已丢弃 group="${decision.groupName}" sender="${decision.senderName}" score=${decision.score}/${decision.threshold}`)
+  rememberAmbientDecision(decision)
+}
+
+export function updateWechatyDutyGroupWorkerState(state = {}) {
+  wechatyDutyWorkerStateSnapshot = {
+    limit: Number(state.limit || wechatyDutyWorkerStateSnapshot.limit || 6),
+    active: Number(state.active || 0),
+    activeMention: Number(state.activeMention ?? state.active_mention ?? 0),
+    activeAmbient: Number(state.activeAmbient ?? state.active_ambient ?? 0),
+    pendingMention: Number(state.pendingMention ?? state.pending_mention ?? 0),
+    pendingAmbient: Number(state.pendingAmbient ?? state.pending_ambient ?? 0),
+  }
 }
 
 async function resolveWechatyMentionContact(room, mentionId = '') {
@@ -1242,7 +1502,8 @@ function getConnectionHint({ online = isTrulyOnline(), rooms = roomSnapshot } = 
 }
 
 export function getWechatyDutyGroupStatus() {
-  const runtime = getWechatyDutyGroupConfig().runtime || {}
+  const cfg = getWechatyDutyGroupConfig()
+  const runtime = cfg.runtime || {}
   const rooms = roomSnapshot.length
     ? roomSnapshot
     : (Array.isArray(runtime.rooms) ? markSelectedRooms(runtime.rooms) : [])
@@ -1257,6 +1518,24 @@ export function getWechatyDutyGroupStatus() {
     status,
     connection_state: online ? 'online' : (needsWechatyRelogin() ? 'offline' : (status === 'qr_ready' ? 'qr_ready' : 'connecting')),
     enabled: wechatyGroupReplyEnabled,
+    concurrency_limit: cfg.concurrencyLimit || 6,
+    worker_state: {
+      limit: wechatyDutyWorkerStateSnapshot.limit || cfg.concurrencyLimit || 6,
+      active: wechatyDutyWorkerStateSnapshot.active || 0,
+      active_mention: wechatyDutyWorkerStateSnapshot.activeMention || 0,
+      active_ambient: wechatyDutyWorkerStateSnapshot.activeAmbient || 0,
+      pending_mention: wechatyDutyWorkerStateSnapshot.pendingMention || 0,
+      pending_ambient: wechatyDutyWorkerStateSnapshot.pendingAmbient || 0,
+    },
+    ambient_reply: {
+      enabled: wechatyGroupReplyEnabled && cfg.enabled !== false,
+      activity_level: cfg.ambientReply?.activityLevel || 'normal',
+      selected_group_count: Array.isArray(cfg.groupNames) ? cfg.groupNames.length : 0,
+      config: cfg.ambientReply,
+      rules: getWeChatAmbientReplyRules(),
+      last_decision: lastAmbientReplyDecision,
+      last_image_decision: lastAmbientImageDecision,
+    },
     group_name: targetGroupNames[0] || '',
     group_names: [...targetGroupNames],
     room_id: online ? targetRoomId : '',
@@ -1275,7 +1554,7 @@ export function getWechatyDutyGroupStatus() {
     needs_relogin: needsWechatyRelogin(),
     hint: getConnectionHint({ online, rooms }),
     offline_qr_notify: getOfflineQrNotifyState(),
-    active_reply: getWechatyActiveReplyConfig(),
+    active_reply: cfg.activeReply || { enabled: false, minIntervalSeconds: 60 },
     last_room_refresh_at: lastRoomRefreshAt || String(runtime.lastRoomRefreshAt || ''),
     last_message_at: lastMessageAt || String(runtime.lastMessageAt || ''),
     health: {
@@ -1893,7 +2172,7 @@ ${imageVisionText}`.trim() : rawText
         console.warn(`[WechatyStats] 写入群统计失败：${err?.message || err}`)
       }
     }
-    const text = imageVisionText
+    let text = imageVisionText
       ? `${activity?.displayText || normalizeWeChatGroupDisplayText(rawText, messageType)}\n${imageVisionText}`.trim()
       : (activity?.displayText || normalizeWeChatGroupDisplayText(rawText, messageType))
     if (!text) return
@@ -1933,11 +2212,110 @@ ${imageVisionText}`.trim() : rawText
       console.log(`[Wechaty] 已屏蔽成员消息，不进入回复链路 topic="${topic}" sender="${senderName}" sender_id="${senderId}" mention=${mentionedSelf}`)
       return
     }
-    // @ 当前扫码登录的微信号时必回；非 @ 消息只有显式开启主动回复并通过群级冷却后才进入回复链路。
-    // 注意：@ 场景不再做任何关键词/意图/内容二次过滤，也不做硬编码回复。
     if (!wechatyGroupReplyEnabled) return
-    const replyTrigger = shouldTriggerWechatyGroupReply({ mentionedSelf, isSelf, groupId, text })
-    if (!replyTrigger.ok) return
+
+    let imageReplyContext = null
+    if (!isSelf) {
+      const imageCandidate = findWechatImageReplyCandidate({
+        groupId,
+        groupName: topic,
+        senderId: senderId || senderName,
+        senderName,
+        mediaId: mediaInfo?.mediaId || 0,
+        text,
+        rawText,
+        rawPayloadText,
+        messageType,
+      })
+      if (imageCandidate.item?.id) {
+        const waitResult = await waitForWeChatImageMediaDescription({
+          mediaId: imageCandidate.item.id,
+          attempts: WECHAT_IMAGE_REPLY_VISION_ATTEMPTS,
+          intervalMs: WECHAT_IMAGE_REPLY_VISION_INTERVAL_MS,
+        })
+        if (!waitResult.ok || !waitResult.description) {
+          const blockedDecision = buildImageNotReadyDecision({
+            groupName: topic,
+            senderName,
+            mediaId: imageCandidate.item.id,
+            result: waitResult,
+            mentionedSelf,
+          })
+          rememberAmbientDecision(blockedDecision)
+          markAmbientObserved(groupId)
+          console.log(`[WechatImageReply] 放弃图片接话 topic="${topic}" sender="${senderName}" media_id=${imageCandidate.item.id} status=${waitResult.vision_status || ''} retries=${waitResult.retryCount || 0}`)
+          return
+        }
+        imageReplyContext = buildWechatImageReplyContext({
+          result: waitResult,
+          item: imageCandidate.item,
+          senderName,
+          quoteMatched: imageCandidate.quoteMatched,
+        })
+        text = buildWechatImageEnhancedText({ baseText: text, imageContext: imageReplyContext })
+        rememberAmbientImageDecision({
+          groupName: topic,
+          senderName,
+          mediaId: imageReplyContext.media_id,
+          visionStatus: imageReplyContext.vision_status,
+          retryCount: imageReplyContext.retry_count,
+          triggered: false,
+          score: imageReplyContext.relevance_score,
+          reasons: imageReplyContext.relevance_reasons,
+          suppressions: [],
+        })
+      }
+    }
+
+    const ambientNow = Date.now()
+    const dutyConfig = getWechatyDutyGroupConfig()
+    let ambientDecision = mentionedSelf
+      ? buildWechatExplicitMentionDecision({ config: dutyConfig, groupName: topic, senderName, text, imageContext: imageReplyContext, now: ambientNow })
+      : evaluateWechatAmbientReply({
+          config: dutyConfig,
+          groupExternalId,
+          groupName: topic,
+          senderName,
+          text,
+          rawText,
+          messageType,
+          isSelf,
+          botNames: [lastLoginUser, previousLoginUser()].filter(Boolean),
+          imageContext: imageReplyContext,
+          state: getAmbientReplyState(groupId),
+          now: ambientNow,
+        })
+    if (imageReplyContext?.media_id && !mentionedSelf) {
+      ambientDecision = await reviewWechatImageAmbientDecision({
+        decision: ambientDecision,
+        imageContext: ambientDecision.image_context || imageReplyContext,
+        groupExternalId,
+        groupName: topic,
+        senderName,
+        text,
+      })
+    }
+    rememberAmbientDecision(ambientDecision)
+    if (imageReplyContext?.media_id) {
+      rememberAmbientImageDecision({
+        groupName: topic,
+        senderName,
+        mediaId: imageReplyContext.media_id,
+        visionStatus: imageReplyContext.vision_status,
+        retryCount: imageReplyContext.retry_count,
+        triggered: ambientDecision.triggered,
+        score: ambientDecision.score,
+        reasons: ambientDecision.reasons || [],
+        suppressions: ambientDecision.suppressions || [],
+        timestamp: ambientDecision.timestamp,
+      })
+    }
+    if (!ambientDecision.triggered) {
+      markAmbientObserved(groupId)
+      console.log(`[WechatAmbient] 不接话 topic="${topic}" sender="${senderName}" score=${ambientDecision.score}/${ambientDecision.threshold} reasons=${ambientDecision.reasons.join(',') || '-'} suppressions=${ambientDecision.suppressions.join(',') || '-'}`)
+      return
+    }
+    markAmbientTriggered(groupId, ambientNow)
 
     let replyText = text
     if (isBareWechatMentionText(replyText) || hasWechatImageUnderstandingIntent(replyText)) {
@@ -1953,35 +2331,33 @@ ${imageVisionText}`.trim() : rawText
         replyText = combinedText
       }
     }
-    const imagePrepared = await prepareWechatImageReplyText({
-      groupId,
-      groupName: topic,
-      senderId: senderId || senderName,
-      senderName,
-      mediaInfo,
-      text: replyText,
-      rawText,
-      rawPayloadText,
-      messageType,
-      mentionedSelf,
-    })
-    if (!imagePrepared.ok) return
-    const imageReplyContext = imagePrepared.imageContext
-    replyText = imagePrepared.text || replyText
 
-    console.log(`[Wechaty] 群消息 topic="${topic}"${isSelf ? ' self=true' : ''}${mentionedSelf ? ' mentioned_self=true' : ''} trigger=${replyTrigger.reason} sender="${senderName}": ${replyText.slice(0, 100)}`)
+    console.log(`[Wechaty] 群消息 topic="${topic}"${isSelf ? ' self=true' : ''}${mentionedSelf ? ' mentioned_self=true' : ''} ambient=${ambientDecision.kind || 'ambient'} score=${ambientDecision.score}/${ambientDecision.threshold} sender="${senderName}": ${replyText.slice(0, 100)}`)
+    const outboundMentionOpts = mentionedSelf
+      ? { mentionId: senderId, mentionName: senderName }
+      : { suppressMention: true }
+    const directReplySenderId = mentionedSelf ? (senderId || '') : ''
 
     const adminVerified = await isWechatyGroupAdminSender({ senderId, senderName, groupId, groupName: topic })
     const adminProtectionReply = adminVerified ? '' : buildAdminProtectionReply({ groupId, groupName: topic, senderId, text: replyText })
     if (adminProtectionReply) {
-      await sendWechatyDutyGroupMessage(room.id, adminProtectionReply, { mentionId: senderId, mentionName: senderName })
+      if (!mentionedSelf) {
+        rememberAmbientDecision({ ...ambientDecision, triggered: false, suppressions: [...(ambientDecision.suppressions || []), 'admin_protection_non_mention'] })
+        return
+      }
+      await sendWechatyDutyGroupMessage(room.id, adminProtectionReply, outboundMentionOpts)
       recordWeChatGroupAssistantReply({ groupId, groupName: topic, reply: adminProtectionReply, targetMemberName: senderName, source: 'wechaty' }).catch(() => {})
       return
     }
     const safety = adminVerified ? { allowed: true, adminBypass: true } : checkWeChatGroupCommandSafety(replyText)
     if (!safety.allowed) {
+      if (!mentionedSelf) {
+        rememberAmbientDecision({ ...ambientDecision, triggered: false, suppressions: [...(ambientDecision.suppressions || []), 'guard_blocked_non_mention'] })
+        console.log(`[WechatAmbient] 安全规则阻止自由接话 topic="${topic}" sender="${senderName}" reason="${safety.reason || ''}"`)
+        return
+      }
       const refusal = safety.reason
-      await sendWechatyDutyGroupMessage(room.id, refusal, { mentionId: senderId, mentionName: senderName })
+      await sendWechatyDutyGroupMessage(room.id, refusal, outboundMentionOpts)
       recordWeChatGroupAssistantReply({ groupId, groupName: topic, reply: refusal, targetMemberName: senderName, source: 'wechaty' }).catch(() => {})
       return
     }
@@ -1998,11 +2374,11 @@ ${imageVisionText}`.trim() : rawText
         .catch(err => console.warn(`[Honcho] 显式群记忆写入失败：${err?.message || err}`))
     }
 
-    if (await tryDirectGroupSummaryPosterReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic })) {
+    if (await tryDirectGroupSummaryPosterReply(room, replyText, { senderId: directReplySenderId, senderName, groupId, groupName: topic })) {
       return
     }
 
-    if (await tryDirectImageTaggingReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic, rawText: rawText || replyText, rawPayloadText, messageType })) {
+    if (await tryDirectImageTaggingReply(room, replyText, { senderId: directReplySenderId, senderName, groupId, groupName: topic, rawText: rawText || replyText, rawPayloadText, messageType })) {
       return
     }
 
@@ -2010,27 +2386,27 @@ ${imageVisionText}`.trim() : rawText
       await waitWechatMediaWindow()
     }
 
-    if (await tryDirectVideoAnalysisReply(room, message, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic, rawText: rawText || replyText, rawPayloadText, messageType })) {
+    if (await tryDirectVideoAnalysisReply(room, message, replyText, { senderId: directReplySenderId, senderName, groupId, groupName: topic, rawText: rawText || replyText, rawPayloadText, messageType })) {
       return
     }
 
-    if (!imageReplyContext?.media_id && await tryDirectImageUnderstandingReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic, rawText: rawText || replyText, rawPayloadText, messageType })) {
+    if (!imageReplyContext?.media_id && await tryDirectImageUnderstandingReply(room, replyText, { senderId: directReplySenderId, senderName, groupId, groupName: topic, rawText: rawText || replyText, rawPayloadText, messageType })) {
       return
     }
 
-    if (await tryDirectStoredImageReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic })) {
+    if (await tryDirectStoredImageReply(room, replyText, { senderId: directReplySenderId, senderName, groupId, groupName: topic })) {
       return
     }
 
-    if (await tryDirectImageGenerationReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic })) {
+    if (await tryDirectImageGenerationReply(room, replyText, { senderId: directReplySenderId, senderName, groupId, groupName: topic })) {
       return
     }
 
-    if (!adminVerified && await tryDirectPublicImageReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic })) {
+    if (!adminVerified && await tryDirectPublicImageReply(room, replyText, { senderId: directReplySenderId, senderName, groupId, groupName: topic })) {
       return
     }
 
-    if (!adminVerified && await tryDirectMemeReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic })) {
+    if (!adminVerified && await tryDirectMemeReply(room, replyText, { senderId: directReplySenderId, senderName, groupId, groupName: topic })) {
       return
     }
 
@@ -2039,11 +2415,38 @@ ${imageVisionText}`.trim() : rawText
       content: formatGroupLine(senderName, replyText),
       channel: WECHAT_GROUP_CHANNEL,
       external_party_id: groupExternalId,
-      social: { platform: 'wechaty-duty-group', group_name: topic, room_id: room.id, sender_name: senderName, sender_id: senderId || '', mentioned_self: mentionedSelf, reply_trigger: replyTrigger.reason, reply_mention_id: senderId || '', reply_mention_name: senderName || '', user_text: replyText, raw_user_text: rawText || replyText, raw_payload_text: rawPayloadText || '', message_type: messageType || '', wechat_admin: adminVerified, mentioned_members: mentionedMembers, image_context: imageReplyContext },
+      social: {
+        platform: 'wechaty-duty-group',
+        group_name: topic,
+        room_id: room.id,
+        sender_name: senderName,
+        sender_id: senderId || '',
+        mentioned_self: mentionedSelf,
+        wechat_worker: true,
+        wechat_worker_kind: mentionedSelf ? 'explicit_mention' : 'ambient',
+        ambient_triggered: !mentionedSelf,
+        ambient_score: Number(ambientDecision.score || 0),
+        ambient_threshold: Number(ambientDecision.threshold || 0),
+        ambient_level: ambientDecision.activityLevel || 'normal',
+        ambient_reasons: ambientDecision.reasons || [],
+        image_context: imageReplyContext,
+        suppress_mention: !mentionedSelf,
+        reply_mention_id: mentionedSelf ? (senderId || '') : '',
+        reply_mention_name: mentionedSelf ? (senderName || '') : '',
+        user_text: replyText,
+        raw_user_text: rawText || replyText,
+        raw_payload_text: rawPayloadText || '',
+        message_type: messageType || '',
+        wechat_admin: adminVerified,
+        mentioned_members: mentionedMembers,
+      },
       timestamp: new Date().toISOString(),
     })
 
-    const replyTargetId = makeWechatyGroupReplyTargetId(room.id, senderId || senderName, senderName)
+    const replyTargetId = mentionedSelf
+      ? makeWechatyGroupReplyTargetId(room.id, senderId || senderName, senderName)
+      : makeWechatyGroupRoomTargetId(room.id)
+    const ambientQueuedAtMs = Date.now()
     const replySocial = {
       platform: 'wechaty-duty-group',
       group_name: topic,
@@ -2051,16 +2454,25 @@ ${imageVisionText}`.trim() : rawText
       sender_name: senderName,
       sender_id: senderId || '',
       mentioned_self: mentionedSelf,
-      reply_trigger: replyTrigger.reason,
-      reply_mention_id: senderId || '',
-      reply_mention_name: senderName || '',
+      wechat_worker: true,
+      wechat_worker_kind: mentionedSelf ? 'explicit_mention' : 'ambient',
+      ambient_triggered: !mentionedSelf,
+      ambient_score: Number(ambientDecision.score || 0),
+      ambient_threshold: Number(ambientDecision.threshold || 0),
+      ambient_level: ambientDecision.activityLevel || 'normal',
+      ambient_reasons: ambientDecision.reasons || [],
+      image_context: imageReplyContext,
+      ambient_queued_at_ms: ambientQueuedAtMs,
+      ambient_queue_ttl_seconds: Number(ambientDecision.ambientQueueTtlSeconds || dutyConfig.ambientReply?.ambientQueueTtlSeconds || 120),
+      suppress_mention: !mentionedSelf,
+      reply_mention_id: mentionedSelf ? (senderId || '') : '',
+      reply_mention_name: mentionedSelf ? (senderName || '') : '',
       user_text: replyText,
       raw_user_text: rawText || replyText,
       raw_payload_text: rawPayloadText || '',
       message_type: messageType || '',
       wechat_admin: adminVerified,
       mentioned_members: mentionedMembers,
-      image_context: imageReplyContext,
     }
     const prompt = await buildWeChatGroupCommandPrompt({
       groupId,
@@ -2075,6 +2487,7 @@ ${imageVisionText}`.trim() : rawText
       mentionedMembers,
       adminVerified,
       replyTargetId,
+      ambientDecision,
     })
     pushMessageRef?.(replyTargetId, prompt, WECHAT_GROUP_CHANNEL, {
       noPersist: true,
