@@ -72,17 +72,15 @@ export async function renderWeChatGroupStatsPosterPng(stats = {}, { templateId =
   const pngPath = path.join(dir, `${base}.png`)
   const html = renderWeChatGroupStatsPosterHtml(stats, { templateId: template })
   await fs.writeFile(htmlPath, html)
-  // Playwright newer versions default to the smaller `chromium_headless_shell`.
-  // In local/release installs that shell is often missing while the regular
-  // "Chrome for Testing" binary exists, causing digest posters to fall back to
-  // plain text. Force the regular Chromium executable so HTML/CSS reports
-  // render into a PNG reliably.
+  // Playwright 新版本默认找体积更小的 chromium_headless_shell。
+  // 本地/发布环境经常只有普通 Chromium 或 Chrome/Edge，因此这里主动兜底，
+  // 避免群聊总结长图渲染失败后回退成文字。
   const executablePath = resolveChromiumExecutable()
   const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) })
   try {
-    const page = await browser.newPage({ viewport: { width: 1080, height: 1350 }, deviceScaleFactor: 1 })
+    const page = await browser.newPage({ viewport: { width: 720, height: 1280 }, deviceScaleFactor: 1 })
     await page.goto('file://' + htmlPath, { waitUntil: 'load' })
-    await page.screenshot({ path: pngPath, fullPage: false, type: 'png' })
+    await page.screenshot({ path: pngPath, fullPage: true, type: 'png' })
     await page.close()
   } finally {
     await browser.close().catch(() => {})
