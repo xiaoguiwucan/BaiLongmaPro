@@ -79,6 +79,41 @@ let lastClawbotQrNotifyResult = ''
 const memberNameRefreshAt = new Map()
 const recentWechatUserMessages = new Map()
 const recentWechatGroupVideos = new Map()
+const activeReplyLastAtByGroup = new Map()
+
+function getWechatyActiveReplyConfig() {
+  const cfg = getWechatyDutyGroupConfig().activeReply || {}
+  const minInterval = Number(cfg.minIntervalSeconds ?? cfg.min_interval_seconds)
+  return {
+    enabled: cfg.enabled === true,
+    minIntervalSeconds: Number.isFinite(minInterval) ? Math.min(3600, Math.max(10, Math.round(minInterval))) : 60,
+  }
+}
+
+function shouldTriggerWechatyGroupReply({ mentionedSelf = false, isSelf = false, groupId = '', text = '' } = {}) {
+  if (mentionedSelf) return { ok: true, reason: 'mention' }
+  const activeReply = getWechatyActiveReplyConfig()
+  if (!activeReply.enabled) return { ok: false, reason: 'active_reply_disabled' }
+  if (isSelf) return { ok: false, reason: 'self_message' }
+  const cleanText = String(text || '').trim()
+  if (!cleanText) return { ok: false, reason: 'empty_text' }
+  const key = String(groupId || '').trim()
+  const now = Date.now()
+  const minIntervalMs = activeReply.minIntervalSeconds * 1000
+  const lastAt = Number(activeReplyLastAtByGroup.get(key) || 0)
+  if (lastAt && now - lastAt < minIntervalMs) {
+    return { ok: false, reason: 'active_reply_cooldown', cooldownRemainingMs: minIntervalMs - (now - lastAt) }
+  }
+  activeReplyLastAtByGroup.set(key, now)
+  return { ok: true, reason: 'active_reply' }
+}
+
+function isWechatyBlockedSender(senderId = '') {
+  const id = String(senderId || '').trim()
+  if (!id) return false
+  const blockedIds = getWechatyDutyGroupConfig().blockedWechatIds || []
+  return blockedIds.map(item => String(item || '').trim()).includes(id)
+}
 
 function waitWechatMediaWindow(ms = WECHAT_MEDIA_WAIT_MS) {
   return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms || 0))))
@@ -1143,6 +1178,7 @@ export function getWechatyDutyGroupStatus() {
     needs_relogin: needsWechatyRelogin(),
     hint: getConnectionHint({ online, rooms }),
     offline_qr_notify: getOfflineQrNotifyState(),
+    active_reply: getWechatyActiveReplyConfig(),
     last_room_refresh_at: lastRoomRefreshAt || String(runtime.lastRoomRefreshAt || ''),
     last_message_at: lastMessageAt || String(runtime.lastMessageAt || ''),
     health: {
@@ -1785,9 +1821,15 @@ ${imageVisionText}`.trim() : rawText
     // 群消息先归档并写入当前群专属记忆库；默认不打扰、不回复。
     archiveWeChatGroupMessage({ groupId, senderId: senderName, text })
     recordWeChatGroupMessage({ groupId, groupName: topic, senderId: senderId || senderName, senderName, text, mentionedSelf, source: 'wechaty' }).catch(err => console.warn(`[Honcho] 写入群记忆失败：${err?.message || err}`))
-    // 只要 @ 了当前扫码登录的微信号，就必须进入大模型。
-    // 注意：这里不再做任何关键词/意图/内容二次过滤，也不做硬编码回复。
-    if (!wechatyGroupReplyEnabled || !mentionedSelf) return
+    if (isWechatyBlockedSender(senderId)) {
+      console.log(`[Wechaty] 已屏蔽成员消息，不进入回复链路 topic="${topic}" sender="${senderName}" sender_id="${senderId}" mention=${mentionedSelf}`)
+      return
+    }
+    // @ 当前扫码登录的微信号时必回；非 @ 消息只有显式开启主动回复并通过群级冷却后才进入回复链路。
+    // 注意：@ 场景不再做任何关键词/意图/内容二次过滤，也不做硬编码回复。
+    if (!wechatyGroupReplyEnabled) return
+    const replyTrigger = shouldTriggerWechatyGroupReply({ mentionedSelf, isSelf, groupId, text })
+    if (!replyTrigger.ok) return
 
     let replyText = text
     if (isBareWechatMentionText(replyText) || hasWechatImageUnderstandingIntent(replyText)) {
@@ -1804,7 +1846,7 @@ ${imageVisionText}`.trim() : rawText
       }
     }
 
-    console.log(`[Wechaty] 群消息 topic="${topic}"${isSelf ? ' self=true' : ''}${mentionedSelf ? ' mentioned_self=true' : ''} sender="${senderName}": ${replyText.slice(0, 100)}`)
+    console.log(`[Wechaty] 群消息 topic="${topic}"${isSelf ? ' self=true' : ''}${mentionedSelf ? ' mentioned_self=true' : ''} trigger=${replyTrigger.reason} sender="${senderName}": ${replyText.slice(0, 100)}`)
 
     const adminVerified = await isWechatyGroupAdminSender({ senderId, senderName, groupId, groupName: topic })
     const adminProtectionReply = adminVerified ? '' : buildAdminProtectionReply({ groupId, groupName: topic, senderId, text: replyText })
@@ -1872,7 +1914,7 @@ ${imageVisionText}`.trim() : rawText
       content: formatGroupLine(senderName, replyText),
       channel: WECHAT_GROUP_CHANNEL,
       external_party_id: groupExternalId,
-      social: { platform: 'wechaty-duty-group', group_name: topic, room_id: room.id, sender_name: senderName, sender_id: senderId || '', mentioned_self: mentionedSelf, reply_mention_id: senderId || '', reply_mention_name: senderName || '', user_text: replyText, raw_user_text: rawText || replyText, raw_payload_text: rawPayloadText || '', message_type: messageType || '', wechat_admin: adminVerified, mentioned_members: mentionedMembers },
+      social: { platform: 'wechaty-duty-group', group_name: topic, room_id: room.id, sender_name: senderName, sender_id: senderId || '', mentioned_self: mentionedSelf, reply_trigger: replyTrigger.reason, reply_mention_id: senderId || '', reply_mention_name: senderName || '', user_text: replyText, raw_user_text: rawText || replyText, raw_payload_text: rawPayloadText || '', message_type: messageType || '', wechat_admin: adminVerified, mentioned_members: mentionedMembers },
       timestamp: new Date().toISOString(),
     })
 
@@ -1884,6 +1926,7 @@ ${imageVisionText}`.trim() : rawText
       sender_name: senderName,
       sender_id: senderId || '',
       mentioned_self: mentionedSelf,
+      reply_trigger: replyTrigger.reason,
       reply_mention_id: senderId || '',
       reply_mention_name: senderName || '',
       user_text: replyText,
@@ -1902,7 +1945,7 @@ ${imageVisionText}`.trim() : rawText
       rawText: rawText || replyText,
       rawPayloadText,
       messageType,
-      mentionedSelf: true,
+      mentionedSelf,
       mentionedMembers,
       adminVerified,
       replyTargetId,

@@ -270,6 +270,14 @@ export async function buildWeChatGroupCommandPrompt({
   const memberMemoryWriteLine = adminVerified
     ? '群友个人永久记忆写入规则：如果管理员要求把内容“记入/保存到/写入”某个群友个人永久记忆库，必须调用 wechat_member_memory_write。可用 member_sender_id/member_name/canonical_member_id 指定目标成员；长文本可以一次传入，系统会分块写入以便向量和关键词召回。'
     : '群友个人永久记忆写入规则：如果群友明确说“记住这个/记入我的个人记忆库/保存到群友个人永久记忆库/能记多少记多少”，必须调用 wechat_member_memory_write，把可见的正文或你整理出的高信息密度内容写入当前发言人的个人永久记忆库；工具存在，禁止回复“没有写接口/只能搜索/不能创建记忆”。'
+  const triggerIntro = mentionedSelf
+    ? `微信群${groupName ? `「${groupName}」` : ''}成员 ${senderName || senderId || '未知成员'} 已经 @ 你并发来消息。`
+    : `微信群${groupName ? `「${groupName}」` : ''}成员 ${senderName || senderId || '未知成员'} 发来一条普通群聊消息；当前群已开启主动回复，所以你可以自然接话。`
+  const replyTargetLine = replyTargetId
+    ? mentionedSelf
+      ? `本轮回复必须调用 send_message(target_id="${replyTargetId}")；系统会自动投递到当前微信群并 @ 这个真实提问人，不要改成群主/管理员/上一位成员。`
+      : `本轮回复必须调用 send_message(target_id="${replyTargetId}")；这是主动回复普通群聊消息，不要声称对方 @ 了你，也不要回复“没叫我/不需要回应”。`
+    : ''
   return [
     verifiedMentionBlock,
     mentionedMembersBlock,
@@ -277,8 +285,8 @@ export async function buildWeChatGroupCommandPrompt({
     adminProtectionBlock,
     !adminVerified && personaPrompt ? `<wechat-assistant-persona>\n${personaPrompt}\n</wechat-assistant-persona>` : '',
     '',
-    `微信群${groupName ? `「${groupName}」` : ''}成员 ${senderName || senderId || '未知成员'} 已经 @ 你并发来消息。`,
-    replyTargetId ? `本轮回复必须调用 send_message(target_id="${replyTargetId}")；系统会自动投递到当前微信群并 @ 这个真实提问人，不要改成群主/管理员/上一位成员。` : '',
+    triggerIntro,
+    replyTargetLine,
     '不要只回复“好的/稍等/马上/接上/我来整理”。如果用户要求续写、长文、总结、故事、报告或文件格式，必须在同一轮直接产出完整正文；需要文件时按上面的文件回复规则发送附件。',
     `用户原文：${userRawText}`,
     displayText && displayText !== userRawText ? `规范化/增强文本：${displayText}` : '',

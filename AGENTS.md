@@ -2,6 +2,8 @@
 
 ## 修改记录
 
+- 2026-06-04：准备为微信群助手增加“屏蔽成员”能力：按微信群成员真实 sender_id 保存黑名单，被屏蔽成员的消息继续入库统计，但无论是否 @ 助手、是否开启主动回复，都不进入回复链路。
+- 2026-06-04：准备新增微信群非 @ 主动回复能力：参考 `xiaoguiwucan/BaiLongma` 的自由回复思路，在本项目 Wechaty 群助手中增加默认关闭的主动回复开关、群级冷却和设置页配置，确保 @ 消息仍然必回，非 @ 消息只在显式开启后进入回复链路。
 - 2026-06-03：补充 `.gitignore`，忽略本地配置、缓存、数据库、虚拟环境和临时产物，避免把运行态文件推到 GitHub。
 - 2026-06-04：修复群聊总结发图回退文字的问题。原因是 `src/social/wechat-group-report-renderer.js` 只在 macOS 路径里找 Playwright Chromium，Windows 下默认可执行文件失效会导致海报渲染失败。已补充 Windows/macOS/Linux 的 Chromium/Edge/Playwright 缓存路径兜底，渲染脚本已验证可输出 PNG。
 - 2026-06-04：修复微信群回复时 @ 人偶发不准确的问题。`src/social/wechaty-duty-group.js` 的 @ 显示名选择已改为当前群昵称/成员表 `room_alias` 优先于传入的旧昵称或联系人备注，并补充回归测试。

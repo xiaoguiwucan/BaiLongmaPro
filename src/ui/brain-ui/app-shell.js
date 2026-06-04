@@ -874,6 +874,19 @@ const createSettingsModal = () => `
                 <input id="wechaty-duty-enabled" type="checkbox" checked>
                 <span>启用微信群 @ 回复</span>
               </label>
+              <label class="wechaty-master-toggle">
+                <input id="wechaty-active-reply-enabled" type="checkbox">
+                <span>允许非 @ 主动回复</span>
+              </label>
+              <label class="wechaty-inline-field">主动回复冷却
+                <select class="settings-select" id="wechaty-active-reply-interval">
+                  <option value="30">30 秒</option>
+                  <option value="60">1 分钟（推荐）</option>
+                  <option value="180">3 分钟</option>
+                  <option value="300">5 分钟</option>
+                  <option value="600">10 分钟</option>
+                </select>
+              </label>
               <button class="settings-save-btn" id="wechaty-refresh-rooms-btn" type="button">刷新真实群列表</button>
             </div>
             <div class="wechaty-qr-area" id="wechaty-qr-area" style="display:none;">
@@ -924,7 +937,7 @@ const createSettingsModal = () => `
               <aside class="wechaty-command-aside">
                 <div class="wechaty-usage-card">
                   <b>怎么触发？</b>
-                  <p>在已勾选的微信群里 @ 当前扫码登录的微信号。普通聊天只记录，不自动插话。</p>
+                  <p>默认只在已勾选的微信群里 @ 当前扫码登录微信号时回复；开启非 @ 主动回复后，普通群聊也会按冷却间隔自然接话。</p>
                 </div>
                 <div class="wechaty-usage-card">
                   <b>群选择有两套</b>
@@ -944,6 +957,7 @@ const createSettingsModal = () => `
             </div>
             <div class="wechaty-capability-map">
               <a href="#wechaty-admin-panel"><b>管理员</b><span>谁能执行敏感指令</span></a>
+              <a href="#wechaty-blocked-panel"><b>屏蔽成员</b><span>不触发任何主动回复</span></a>
               <a href="#wechaty-meme-panel"><b>斗图</b><span>公开表情包/GIF</span></a>
               <a href="#wechaty-persona-panel"><b>性格</b><span>回复语气和边界</span></a>
               <a href="#wechaty-memory-manager"><b>群记忆</b><span>内置长期记忆</span></a>
@@ -973,6 +987,27 @@ const createSettingsModal = () => `
               </div>
               <div class="wechaty-admin-members" id="wechaty-admin-members">
                 <div class="wechaty-empty">登录并刷新昵称后，这里会按微信昵称显示群成员，可一键加入管理员。</div>
+              </div>
+            </div>
+
+            <div class="wechaty-admin-panel wechaty-blocked-panel" id="wechaty-blocked-panel">
+              <div class="wechaty-subsection-head">
+                <div>
+                  <div class="wechaty-subsection-title">屏蔽成员（昵称选择，底层精确 ID）</div>
+                  <p class="settings-hint">被屏蔽成员的消息仍会入库、统计和写入群记忆，但无论 @ 助手还是开启非 @ 主动回复，都不会进入任何回复链路。</p>
+                </div>
+              </div>
+              <input class="settings-input wechaty-admin-search" id="wechaty-blocked-search" type="search" placeholder="搜索微信昵称，点成员卡片即可屏蔽/取消…">
+              <div class="wechaty-admin-editor">
+                <textarea class="settings-textarea" id="wechaty-blocked-ids" rows="4" readonly placeholder="这里显示已屏蔽成员昵称。请从下方成员列表点击添加/取消，底层会自动保存精确 ID。"></textarea>
+                <div class="wechaty-admin-side">
+                  <button class="settings-save-btn primary" id="wechaty-save-blocked-btn" type="button">保存屏蔽成员</button>
+                  <span class="settings-feedback" id="wechaty-blocked-feedback"></span>
+                  <small>屏蔽规则：只按 Wechaty sender_id 精确匹配，不按昵称判断，避免同名成员或改名造成误屏蔽。</small>
+                </div>
+              </div>
+              <div class="wechaty-admin-members" id="wechaty-blocked-members">
+                <div class="wechaty-empty">登录并刷新昵称后，这里会按微信昵称显示群成员，可一键加入屏蔽名单。</div>
               </div>
             </div>
 

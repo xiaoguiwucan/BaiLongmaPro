@@ -1259,7 +1259,7 @@ const SOCIAL_ENV_KEYS = [
 const DEFAULT_WECHATY_DUTY_GROUP_NAMES = []
 
 const WECHATY_PERSONA_OWNER_CLONE_PROMPT = [
-  '你是白龙马 / 小白龙，是部署在微信群里的 AI 数字分身。只要 Wechaty 消息元数据确认 @ 了当前登录微信号，就直接回复。',
+  '你是白龙马 / 小白龙，是部署在微信群里的 AI 数字分身。Wechaty 消息元数据确认 @ 当前登录微信号时必须直接回复；如果当前群开启了非 @ 主动回复，也可以对普通群聊自然接话。',
   '',
   '说话风格：',
   '- 口语化、直接、不废话，像主人在群里快速接话。',
@@ -1277,7 +1277,7 @@ const WECHATY_PERSONA_OWNER_CLONE_PROMPT = [
 ].join('\n')
 
 const WECHATY_PERSONA_TECH_DUTY_PROMPT = [
-  '你是白龙马 / 小白龙，是微信群里的技术值班 AI 助手。只要 Wechaty 消息元数据确认 @ 了当前登录微信号，就直接回复。',
+  '你是白龙马 / 小白龙，是微信群里的技术值班 AI 助手。Wechaty 消息元数据确认 @ 当前登录微信号时必须直接回复；如果当前群开启了非 @ 主动回复，也可以对普通群聊里的技术问题自然接话。',
   '',
   '回复风格：',
   '- 先给结论，再给原因或步骤。',
@@ -1295,7 +1295,7 @@ const WECHATY_PERSONA_TECH_DUTY_PROMPT = [
 ].join('\n')
 
 const WECHATY_PERSONA_SOCIAL_FUN_PROMPT = [
-  '你是白龙马 / 小白龙，是微信群里的轻松陪聊 AI 助手。只要 Wechaty 消息元数据确认 @ 了当前登录微信号，就直接回复。',
+  '你是白龙马 / 小白龙，是微信群里的轻松陪聊 AI 助手。Wechaty 消息元数据确认 @ 当前登录微信号时必须直接回复；如果当前群开启了非 @ 主动回复，也可以对普通群聊自然接话。',
   '',
   '说话风格：',
   '- 自然、幽默、接地气，会接梗但不过度贫嘴。',
@@ -1317,7 +1317,7 @@ export const WECHATY_PERSONA_PRESETS = [
     id: 'owner-clone',
     name: '主人数字分身',
     badge: '默认',
-    summary: '口语化、直接、不废话，适合大多数微信群 @ 回复。',
+    summary: '口语化、直接、不废话，适合微信群 @ 回复和主动接话。',
     prompt: WECHATY_PERSONA_OWNER_CLONE_PROMPT,
   },
   {
@@ -1367,6 +1367,11 @@ const DEFAULT_WECHATY_OFFLINE_QR_NOTIFY = {
   autoRelogin: true,
 }
 
+const DEFAULT_WECHATY_ACTIVE_REPLY = {
+  enabled: false,
+  minIntervalSeconds: 60,
+}
+
 function normalizeWechatyOfflineQrNotify(value = {}) {
   const raw = value && typeof value === 'object' ? value : {}
   const cooldown = Number(raw.cooldownMinutes ?? raw.cooldown_minutes)
@@ -1378,6 +1383,17 @@ function normalizeWechatyOfflineQrNotify(value = {}) {
   }
 }
 
+function normalizeWechatyActiveReply(value = {}) {
+  const raw = value && typeof value === 'object' ? value : {}
+  const minInterval = Number(raw.minIntervalSeconds ?? raw.min_interval_seconds ?? raw.cooldownSeconds ?? raw.cooldown_seconds)
+  return {
+    enabled: raw.enabled === true,
+    minIntervalSeconds: Number.isFinite(minInterval)
+      ? Math.min(3600, Math.max(10, Math.round(minInterval)))
+      : DEFAULT_WECHATY_ACTIVE_REPLY.minIntervalSeconds,
+  }
+}
+
 export function getWechatyDutyGroupConfig() {
   let stored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.social?.wechatyDutyGroup || {} } catch {}
@@ -1386,6 +1402,7 @@ export function getWechatyDutyGroupConfig() {
   const personaPrompt = String(stored.personaPrompt || stored.persona_prompt || DEFAULT_WECHATY_PERSONA_PROMPT).trim() || DEFAULT_WECHATY_PERSONA_PROMPT
   const personaPresetId = resolveWechatyPersonaPresetId(personaPrompt, stored.personaPresetId || stored.persona_preset_id)
   const adminWechatIds = normalizeWechatyAdminIds(stored.adminWechatIds ?? stored.admin_wechat_ids ?? stored.adminIds ?? stored.admin_ids ?? [])
+  const blockedWechatIds = normalizeWechatyAdminIds(stored.blockedWechatIds ?? stored.blocked_wechat_ids ?? stored.blockedIds ?? stored.blocked_ids ?? [])
   return {
     enabled: stored.enabled !== false,
     groupNames,
@@ -1394,7 +1411,10 @@ export function getWechatyDutyGroupConfig() {
     adminModeEnabled: stored.adminModeEnabled === true || stored.admin_mode_enabled === true,
     adminWechatIds,
     adminIds: adminWechatIds,
+    blockedWechatIds,
+    blockedIds: blockedWechatIds,
     offlineQrNotify: normalizeWechatyOfflineQrNotify(stored.offlineQrNotify ?? stored.offline_qr_notify ?? DEFAULT_WECHATY_OFFLINE_QR_NOTIFY),
+    activeReply: normalizeWechatyActiveReply(stored.activeReply ?? stored.active_reply ?? DEFAULT_WECHATY_ACTIVE_REPLY),
     runtime: stored.runtime && typeof stored.runtime === 'object' ? stored.runtime : {},
   }
 }
@@ -1433,6 +1453,14 @@ export function setWechatyDutyGroupConfig(updates = {}) {
     next.adminWechatIds = normalizeWechatyAdminIds(updates.adminWechatIds ?? updates.admin_wechat_ids ?? updates.adminIds ?? updates.admin_ids)
   }
   if (
+    Object.prototype.hasOwnProperty.call(updates, 'blockedWechatIds')
+    || Object.prototype.hasOwnProperty.call(updates, 'blocked_wechat_ids')
+    || Object.prototype.hasOwnProperty.call(updates, 'blockedIds')
+    || Object.prototype.hasOwnProperty.call(updates, 'blocked_ids')
+  ) {
+    next.blockedWechatIds = normalizeWechatyAdminIds(updates.blockedWechatIds ?? updates.blocked_wechat_ids ?? updates.blockedIds ?? updates.blocked_ids)
+  }
+  if (
     Object.prototype.hasOwnProperty.call(updates, 'offlineQrNotify')
     || Object.prototype.hasOwnProperty.call(updates, 'offline_qr_notify')
     || Object.prototype.hasOwnProperty.call(updates, 'offlineQrNotifyEnabled')
@@ -1445,6 +1473,21 @@ export function setWechatyDutyGroupConfig(updates = {}) {
       ...(raw && typeof raw === 'object' ? raw : {}),
       ...(Object.prototype.hasOwnProperty.call(updates, 'offlineQrNotifyEnabled') ? { enabled: updates.offlineQrNotifyEnabled === true } : {}),
       ...(Object.prototype.hasOwnProperty.call(updates, 'offline_qr_notify_enabled') ? { enabled: updates.offline_qr_notify_enabled === true } : {}),
+    })
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(updates, 'activeReply')
+    || Object.prototype.hasOwnProperty.call(updates, 'active_reply')
+    || Object.prototype.hasOwnProperty.call(updates, 'activeReplyEnabled')
+    || Object.prototype.hasOwnProperty.call(updates, 'active_reply_enabled')
+  ) {
+    const raw = updates.activeReply ?? updates.active_reply ?? {}
+    const currentActiveReply = normalizeWechatyActiveReply(next.activeReply ?? next.active_reply ?? DEFAULT_WECHATY_ACTIVE_REPLY)
+    next.activeReply = normalizeWechatyActiveReply({
+      ...currentActiveReply,
+      ...(raw && typeof raw === 'object' ? raw : {}),
+      ...(Object.prototype.hasOwnProperty.call(updates, 'activeReplyEnabled') ? { enabled: updates.activeReplyEnabled === true } : {}),
+      ...(Object.prototype.hasOwnProperty.call(updates, 'active_reply_enabled') ? { enabled: updates.active_reply_enabled === true } : {}),
     })
   }
   next.personaPresetId = resolveWechatyPersonaPresetId(next.personaPrompt || DEFAULT_WECHATY_PERSONA_PROMPT, next.personaPresetId)

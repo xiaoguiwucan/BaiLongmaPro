@@ -378,6 +378,10 @@ function isWechatyDutyGroupMentionTurn(msg = null) {
   return isWechatyDutyGroupTurn(msg) && msg?.social?.mentioned_self === true
 }
 
+function isWechatyDutyGroupReplyTurn(msg = null) {
+  return isWechatyDutyGroupTurn(msg) && (msg?.social?.mentioned_self === true || msg?.social?.reply_trigger === 'active_reply')
+}
+
 function shouldStopAfterWechatyGroupSendMessage({ args = {} } = {}) {
   return !isLikelyProgressOnlySendMessageContent(args?.content || '')
 }
@@ -1054,8 +1058,8 @@ async function runTurn(input, label, msg = null) {
     if (fastUserPath) {
       directions.unshift('Current turn is a real-time external user message. Understand it quickly and reply directly with send_message before doing slow tools or deep context gathering. Use heavier tools only when the reply depends on them. During execution, whenever there is meaningful progress or a useful finding, send_message to keep the user in the loop. Do not ask for permission for actions you can safely perform; act, and speak when there is something worth saying.')
     }
-    if (isWechatyDutyGroupMentionTurn(msg)) {
-      directions.unshift('微信群 @ 回复硬规则：本轮只发送一条真正给群友看的最终回复。不要发送“已回复/回复完毕/无需补充/本轮结束/已经发送”这类内部状态；不要把工具执行协议、结束语或自检语发到群里。不要把“好的/稍等/马上/我来整理/接上”当最终回复；如果用户要求续写、长文、总结、故事、报告或文件格式，必须同一轮直接产出内容。回复应直接回答 @ 后的真实问题。')
+    if (isWechatyDutyGroupReplyTurn(msg)) {
+      directions.unshift('微信群回复硬规则：本轮只发送一条真正给群友看的最终回复。不要发送“已回复/回复完毕/无需补充/本轮结束/已经发送”这类内部状态；不要把工具执行协议、结束语或自检语发到群里。不要把“好的/稍等/马上/我来整理/接上”当最终回复；如果用户要求续写、长文、总结、故事、报告或文件格式，必须同一轮直接产出内容。回复应直接回答当前群友这条消息。')
     }
     if (isVoiceChannel(msg?.channel)) {
       directions.unshift('IMPORTANT voice reply protocol: this is a direct voice conversation. Reply in your normal assistant message content immediately. Do NOT call send_message for this local voice channel unless a separate external/social delivery is explicitly required. The runtime will show and speak your assistant message automatically.')
@@ -1268,7 +1272,7 @@ async function runTurn(input, label, msg = null) {
       signal: controller.signal,
       toolContext,
       mustReply: !!msg?.fromId,
-      stopAfterSuccessfulSendMessage: isWechatyDutyGroupMentionTurn(msg) ? shouldStopAfterWechatyGroupSendMessage : false,
+      stopAfterSuccessfulSendMessage: isWechatyDutyGroupReplyTurn(msg) ? shouldStopAfterWechatyGroupSendMessage : false,
       onToolCall: (name, args, result) => {
         const resultText = String(result)
         let ok = true

@@ -1843,6 +1843,16 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             personaPresetId: body.persona_preset_id ?? body.personaPresetId,
           }
           if (
+            Object.prototype.hasOwnProperty.call(body, 'active_reply')
+            || Object.prototype.hasOwnProperty.call(body, 'activeReply')
+            || Object.prototype.hasOwnProperty.call(body, 'active_reply_enabled')
+            || Object.prototype.hasOwnProperty.call(body, 'activeReplyEnabled')
+          ) {
+            updates.activeReply = body.active_reply ?? body.activeReply ?? {
+              enabled: body.active_reply_enabled ?? body.activeReplyEnabled,
+            }
+          }
+          if (
             Object.prototype.hasOwnProperty.call(body, 'offline_qr_notify')
             || Object.prototype.hasOwnProperty.call(body, 'offlineQrNotify')
             || Object.prototype.hasOwnProperty.call(body, 'offline_qr_notify_enabled')
@@ -1862,6 +1872,12 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
             || Object.prototype.hasOwnProperty.call(body, 'admin_ids')
             || Object.prototype.hasOwnProperty.call(body, 'adminIds')
           ) updates.adminWechatIds = body.admin_wechat_ids ?? body.adminWechatIds ?? body.admin_ids ?? body.adminIds
+          if (
+            Object.prototype.hasOwnProperty.call(body, 'blocked_wechat_ids')
+            || Object.prototype.hasOwnProperty.call(body, 'blockedWechatIds')
+            || Object.prototype.hasOwnProperty.call(body, 'blocked_ids')
+            || Object.prototype.hasOwnProperty.call(body, 'blockedIds')
+          ) updates.blockedWechatIds = body.blocked_wechat_ids ?? body.blockedWechatIds ?? body.blocked_ids ?? body.blockedIds
           const cfg = setWechatyDutyGroupConfig(updates)
           if (onlyOfflineQrNotify) {
             return jsonResponse(res, 200, { ok: true, wechatyDutyGroup: cfg, status: getWechatyDutyGroupStatus() })

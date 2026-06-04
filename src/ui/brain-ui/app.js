@@ -2116,6 +2116,8 @@ function initTTSSettings() {
   const voiceThreshVal    = document.getElementById("settings-voice-threshold-val");
   const wechatyDutyStatus = document.getElementById("wechaty-duty-status");
   const wechatyDutyEnabled = document.getElementById("wechaty-duty-enabled");
+  const wechatyActiveReplyEnabled = document.getElementById("wechaty-active-reply-enabled");
+  const wechatyActiveReplyInterval = document.getElementById("wechaty-active-reply-interval");
   const wechatyStartBtn = document.getElementById("wechaty-start-btn");
   const wechatyReloginBtn = document.getElementById("wechaty-relogin-btn");
   const wechatyRefreshRoomsBtn = document.getElementById("wechaty-refresh-rooms-btn");
@@ -2140,6 +2142,11 @@ function initTTSSettings() {
   const wechatyRefreshAdminMembersBtn = document.getElementById("wechaty-refresh-admin-members-btn");
   const wechatyAdminMembers = document.getElementById("wechaty-admin-members");
   const wechatyAdminFeedback = document.getElementById("wechaty-admin-feedback");
+  const wechatyBlockedIds = document.getElementById("wechaty-blocked-ids");
+  const wechatyBlockedSearch = document.getElementById("wechaty-blocked-search");
+  const wechatySaveBlockedBtn = document.getElementById("wechaty-save-blocked-btn");
+  const wechatyBlockedMembers = document.getElementById("wechaty-blocked-members");
+  const wechatyBlockedFeedback = document.getElementById("wechaty-blocked-feedback");
   const wechatyRefreshMemoryBtn = document.getElementById("wechaty-refresh-memory-btn");
   const wechatyClearGroupMemoryBtn = document.getElementById("wechaty-clear-group-memory-btn");
   const wechatyMemoryGroups = document.getElementById("wechaty-memory-groups");
@@ -3091,6 +3098,7 @@ function initTTSSettings() {
   let wechatySavedPersonaPrompt = "";
   let wechatySavedPersonaPresetId = "custom";
   let wechatyAdminIdSet = new Set();
+  let wechatyBlockedIdSet = new Set();
   let knowledgeSourcesCache = [];
   let knowledgePreviewCache = [];
   let knowledgeActiveSourceId = 0;
@@ -3212,12 +3220,57 @@ function initTTSSettings() {
     };
   }
 
+  function getWechatyBlockedMemberLabelById(id = "") {
+    const key = String(id || "").trim();
+    if (!key) return "";
+    const member = wechatyAdminMemberCache.find(item => String(item.sender_id || "").trim() === key);
+    const nickname = String(member?.display_name || member?.room_alias || member?.contact_alias || member?.contact_name || "").trim();
+    if (nickname) return nickname;
+    return `等待刷新昵称（${key.slice(0, 8)}…）`;
+  }
+
+  function syncWechatyBlockedNicknameBox() {
+    if (!wechatyBlockedIds) return;
+    const labels = [...wechatyBlockedIdSet].map(id => getWechatyBlockedMemberLabelById(id)).filter(Boolean);
+    wechatyBlockedIds.value = labels.join("\n");
+    wechatyBlockedIds.title = [...wechatyBlockedIdSet].join("\n");
+  }
+
+  function applyWechatyBlockedConfig(config = {}) {
+    const hasBlockedFields = Object.prototype.hasOwnProperty.call(config, "blockedWechatIds")
+      || Object.prototype.hasOwnProperty.call(config, "blockedIds")
+      || Object.prototype.hasOwnProperty.call(config, "blocked_wechat_ids")
+      || Object.prototype.hasOwnProperty.call(config, "blocked_ids");
+    if (!hasBlockedFields) {
+      renderWechatyBlockedMembers();
+      return;
+    }
+    const ids = normalizeWechatyAdminIds(config.blockedWechatIds || config.blockedIds || config.blocked_wechat_ids || config.blocked_ids || []);
+    wechatyBlockedIdSet = new Set(ids);
+    syncWechatyBlockedNicknameBox();
+    renderWechatyBlockedMembers();
+  }
+
+  function collectWechatyBlockedConfig() {
+    const ids = [...wechatyBlockedIdSet].map(id => String(id || "").trim()).filter(Boolean);
+    syncWechatyBlockedNicknameBox();
+    return { blockedWechatIds: ids };
+  }
+
   function collectWechatyOfflineQrNotifyConfig() {
     const cooldown = Number(wechatyOfflineQrNotifyCooldown?.value || 15);
     return {
       enabled: wechatyOfflineQrNotifyEnabled?.checked !== false,
       autoRelogin: wechatyOfflineQrNotifyAutoRelogin?.checked !== false,
       cooldownMinutes: [5, 10, 15, 30, 60].includes(cooldown) ? cooldown : 15,
+    };
+  }
+
+  function collectWechatyActiveReplyConfig() {
+    const interval = Number(wechatyActiveReplyInterval?.value || 60);
+    return {
+      enabled: wechatyActiveReplyEnabled?.checked === true,
+      minIntervalSeconds: [30, 60, 180, 300, 600].includes(interval) ? interval : 60,
     };
   }
 
@@ -3998,6 +4051,7 @@ function initTTSSettings() {
     if (Array.isArray(data?.members)) {
       wechatyAdminMemberCache = data.members;
       syncWechatyAdminNicknameBox();
+      syncWechatyBlockedNicknameBox();
     }
     const keyword = String(wechatyAdminSearch?.value || "").trim().toLowerCase();
     const members = wechatyAdminMemberCache.filter(member => {
@@ -4011,6 +4065,7 @@ function initTTSSettings() {
     });
     if (!members.length) {
       wechatyAdminMembers.innerHTML = `<div class="wechaty-empty">${wechatyAdminMemberCache.length ? "没有匹配的成员，请换微信昵称搜索。" : "暂无已识别群成员。请先登录微信、勾选群组并点击“刷新昵称”。"}</div>`;
+      renderWechatyBlockedMembers();
       return;
     }
     wechatyAdminMembers.innerHTML = members.slice(0, 160).map(member => {
@@ -4020,6 +4075,34 @@ function initTTSSettings() {
       return `<button class="wechaty-admin-member${selected ? ' active' : ''}" type="button" data-sender-id="${escapeHtml(id)}" title="底层精确 sender_id：${escapeHtml(id)}">
         <span><b>${escapeHtml(nickname)}</b><em>${escapeHtml(member.group_name || '未知群')}</em></span>
         <small>${selected ? '已是管理员' : '点击加入管理员'}</small>
+      </button>`;
+    }).join('');
+    renderWechatyBlockedMembers();
+  }
+
+  function renderWechatyBlockedMembers() {
+    if (!wechatyBlockedMembers) return;
+    const keyword = String(wechatyBlockedSearch?.value || "").trim().toLowerCase();
+    const members = wechatyAdminMemberCache.filter(member => {
+      if (!keyword) return true;
+      return [
+        member.display_name,
+        member.room_alias,
+        member.contact_alias,
+        member.contact_name,
+      ].some(value => String(value || "").toLowerCase().includes(keyword));
+    });
+    if (!members.length) {
+      wechatyBlockedMembers.innerHTML = `<div class="wechaty-empty">${wechatyAdminMemberCache.length ? "没有匹配的成员，请换微信昵称搜索。" : "暂无已识别群成员。请先登录微信、勾选群组并点击“刷新昵称”。"}</div>`;
+      return;
+    }
+    wechatyBlockedMembers.innerHTML = members.slice(0, 160).map(member => {
+      const id = String(member.sender_id || '').trim();
+      const selected = wechatyBlockedIdSet.has(id);
+      const nickname = member.display_name || member.room_alias || member.contact_alias || member.contact_name || '未知成员';
+      return `<button class="wechaty-admin-member${selected ? ' active' : ''}" type="button" data-sender-id="${escapeHtml(id)}" title="底层精确 sender_id：${escapeHtml(id)}">
+        <span><b>${escapeHtml(nickname)}</b><em>${escapeHtml(member.group_name || '未知群')}</em></span>
+        <small>${selected ? '已屏蔽' : '点击屏蔽'}</small>
       </button>`;
     }).join('');
   }
@@ -4055,6 +4138,7 @@ function initTTSSettings() {
 
   async function saveWechatyAdminSettings() {
     const adminConfig = collectWechatyAdminConfig();
+    const blockedConfig = collectWechatyBlockedConfig();
     if (wechatySaveAdminsBtn) wechatySaveAdminsBtn.disabled = true;
     try {
       const groupNames = collectWechatySelectedRooms();
@@ -4068,6 +4152,8 @@ function initTTSSettings() {
           persona_preset_id: describeWechatyPersona(wechatyPersonaPrompt?.value || "").id,
           admin_mode_enabled: adminConfig.adminModeEnabled,
           admin_wechat_ids: adminConfig.adminWechatIds,
+          blocked_wechat_ids: blockedConfig.blockedWechatIds,
+          active_reply: collectWechatyActiveReplyConfig(),
           offline_qr_notify: collectWechatyOfflineQrNotifyConfig(),
         }),
       });
@@ -4082,6 +4168,41 @@ function initTTSSettings() {
       showFeedback(wechatyAdminFeedback || wechatyDutyFeedback, "保存管理员请求失败", true);
     } finally {
       if (wechatySaveAdminsBtn) wechatySaveAdminsBtn.disabled = false;
+    }
+  }
+
+  async function saveWechatyBlockedSettings() {
+    const adminConfig = collectWechatyAdminConfig();
+    const blockedConfig = collectWechatyBlockedConfig();
+    if (wechatySaveBlockedBtn) wechatySaveBlockedBtn.disabled = true;
+    try {
+      const groupNames = collectWechatySelectedRooms();
+      const res = await fetch(`${API}/settings/social/wechaty-duty-group`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: !!wechatyDutyEnabled?.checked,
+          group_names: groupNames.length ? groupNames : [...wechatyConfiguredGroupNames],
+          persona_prompt: wechatyPersonaPrompt?.value || "",
+          persona_preset_id: describeWechatyPersona(wechatyPersonaPrompt?.value || "").id,
+          admin_mode_enabled: adminConfig.adminModeEnabled,
+          admin_wechat_ids: adminConfig.adminWechatIds,
+          blocked_wechat_ids: blockedConfig.blockedWechatIds,
+          active_reply: collectWechatyActiveReplyConfig(),
+          offline_qr_notify: collectWechatyOfflineQrNotifyConfig(),
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        applyWechatyDutyConfig(data.wechatyDutyGroup, data.status);
+        showFeedback(wechatyBlockedFeedback || wechatyDutyFeedback, blockedConfig.blockedWechatIds.length
+          ? `屏蔽成员已保存并立即生效：${blockedConfig.blockedWechatIds.length} 人`
+          : "屏蔽成员已清空");
+      } else showFeedback(wechatyBlockedFeedback || wechatyDutyFeedback, data.error || "保存屏蔽成员失败", true);
+    } catch {
+      showFeedback(wechatyBlockedFeedback || wechatyDutyFeedback, "保存屏蔽成员请求失败", true);
+    } finally {
+      if (wechatySaveBlockedBtn) wechatySaveBlockedBtn.disabled = false;
     }
   }
 
@@ -5396,7 +5517,15 @@ function initTTSSettings() {
 
   function applyWechatyDutyConfig(config = {}, status = {}) {
     if (wechatyDutyEnabled) wechatyDutyEnabled.checked = config.enabled !== false;
+    const activeReply = config.activeReply || config.active_reply || status.active_reply || {};
+    if (wechatyActiveReplyEnabled) wechatyActiveReplyEnabled.checked = activeReply.enabled === true;
+    if (wechatyActiveReplyInterval) {
+      const interval = Number(activeReply.minIntervalSeconds || activeReply.min_interval_seconds || 60);
+      const allowed = [30, 60, 180, 300, 600];
+      wechatyActiveReplyInterval.value = String(allowed.includes(interval) ? interval : 60);
+    }
     applyWechatyAdminConfig(config || {});
+    applyWechatyBlockedConfig(config || {});
     applyWechatyOfflineQrNotifyConfig(config || {}, status || {});
     const hasPersonaPrompt = Object.prototype.hasOwnProperty.call(config, "personaPrompt");
     if (hasPersonaPrompt) {
@@ -5946,6 +6075,23 @@ function initTTSSettings() {
 
   wechatySaveAdminsBtn?.addEventListener("click", saveWechatyAdminSettings);
   wechatyRefreshAdminMembersBtn?.addEventListener("click", refreshWechatyAdminMembers);
+  wechatyBlockedIds?.addEventListener("input", () => {
+    // 这个框只展示昵称，屏蔽仍由点击成员卡片得到的 sender_id 集合决定。
+    syncWechatyBlockedNicknameBox();
+    renderWechatyBlockedMembers();
+  });
+  wechatyBlockedSearch?.addEventListener("input", () => renderWechatyBlockedMembers());
+  wechatyBlockedMembers?.addEventListener("click", (event) => {
+    const btn = event.target?.closest?.(".wechaty-admin-member");
+    if (!btn) return;
+    const id = btn.dataset.senderId || "";
+    if (!id) return;
+    if (wechatyBlockedIdSet.has(id)) wechatyBlockedIdSet.delete(id);
+    else wechatyBlockedIdSet.add(id);
+    syncWechatyBlockedNicknameBox();
+    renderWechatyBlockedMembers();
+  });
+  wechatySaveBlockedBtn?.addEventListener("click", saveWechatyBlockedSettings);
   wechatyDigestGroupList?.addEventListener("change", (event) => {
     const cb = event.target?.closest?.(".wechaty-digest-group-checkbox");
     if (!cb) return;
@@ -6521,6 +6667,8 @@ function initTTSSettings() {
           persona_preset_id: describeWechatyPersona(wechatyPersonaPrompt?.value || "").id,
           admin_mode_enabled: !!wechatyAdminEnabled?.checked,
           admin_wechat_ids: [...wechatyAdminIdSet],
+          blocked_wechat_ids: collectWechatyBlockedConfig().blockedWechatIds,
+          active_reply: collectWechatyActiveReplyConfig(),
           offline_qr_notify: collectWechatyOfflineQrNotifyConfig(),
         }),
       });

@@ -4359,6 +4359,21 @@ body.person-card-mode .person-card-panel,
   background: rgba(255,255,255,0.03);
 }
 .wechaty-master-toggle input { margin: 0; }
+.wechaty-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: var(--ink2);
+  font-size: 11px;
+}
+.wechaty-inline-field .settings-select {
+  width: auto;
+  min-width: 118px;
+  height: 30px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
 .wechaty-room-tools .settings-input {
   flex: 1 1 220px;
   width: auto;
