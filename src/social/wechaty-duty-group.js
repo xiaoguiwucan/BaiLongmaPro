@@ -9,7 +9,7 @@ import { buildWeChatGroupStatsDigest, getWeChatGroupStats, isWeChatInternalIdLik
 import { renderWeChatGroupStatsPosterPng } from './wechat-group-report-renderer.js'
 import { searchMemes } from './meme-search.js'
 import { generateImageForWechat, isWechatImageGenerationRequest } from './image-generation-skill.js'
-import { describeWeChatImageMedia, findWeChatImageMediaForQuote, findWeChatImageMediaForRequest, getWeChatImageVisionStatus, maybeDescribeWeChatImageMedia, resolveWeChatImageMediaFile, updateWeChatImageMediaItem, upsertWeChatImageMediaItem } from './wechat-image-vision.js'
+import { describeWeChatImageMedia, findWeChatImageMediaForQuote, findWeChatImageMediaForRequest, getWeChatImageVisionStatus, maybeDescribeWeChatImageMedia, resolveWeChatImageMediaFile, updateWeChatImageMediaItem, upsertWeChatImageMediaItem, waitForWeChatImageMediaDescription } from './wechat-image-vision.js'
 import { isWechatReplyGeneratedFilePath } from './wechat-file-reply.js'
 import { checkWeChatGroupCommandSafety } from './wechat-command-guard.js'
 import { searchPublicImages } from './public-image-search.js'
@@ -40,9 +40,12 @@ const LOCAL_FILE_REFERENCE_RE = /(?:file:\/\/|\/Users\/|~\/|[A-Za-z]:\\|(?:桌�
 const DIRECT_MEME_REQUEST_RE = /(?:斗图|表情包|梗图|gif|动图|发.{0,4}表情|来.{0,4}表情|整.{0,4}表情|发.{0,3}图|来.{0,3}图|开心|难过|愤怒|生气|鄙视|无语|笑死|吃瓜|破防).{0,8}(?:表情|表情包|梗图|图|gif)?|(?:表情|表情包|梗图|gif|动图)$/iu
 const DIRECT_PUBLIC_IMAGE_REQUEST_RE = /(?:找|搜|发|发送|来|给我|整).{0,12}(?:网络|网上|公开)?(?:图片|照片|壁纸|头像|配图|示意图|产品图|实拍图|图)(?!.*(?:表情包|表情|斗图|梗图|gif|动图))|(?:图片|照片|壁纸|头像|示意图).{0,8}(?:找|搜|发|来|给我)/iu
 const IMAGE_UNDERSTANDING_REQUEST_RE = /(?:总结|概括|精简|识别|解析|分析|看看|看下|查看|读|理解|解释|说说|提取|压成).{0,24}(?:图|图片|照片|截图|海报|表格|内容|文字)|(?:图|图片|照片|截图|海报|表格).{0,24}(?:总结|概括|精简|识别|解析|分析|看看|看下|查看|读|理解|解释|内容|文字)/iu
+const IMAGE_REPLY_META_DISCUSSION_RE = /(?:别|不要|别再|停止|禁止|避免).{0,12}(?:乱|胡乱)?.{0,12}(?:回复|解释|识别|解析|看).{0,12}(?:图|图片|图片内容)|(?:更新|修复|调整|优化|改|改一下|处理).{0,12}(?:图片|图).{0,12}(?:回复|接话|识图|识别|解析|逻辑|规则)|(?:提到|说到|包含).{0,8}(?:图片|图).{0,8}(?:两个字|这个词|就).{0,12}(?:回复|解释|识别|解析)/iu
 const WECHAT_FOLLOWUP_WINDOW_MS = 10 * 1000
 const WECHAT_MEDIA_WAIT_MS = 3200
 const WECHAT_VIDEO_REFERENCE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
+const WECHAT_IMAGE_REPLY_VISION_ATTEMPTS = 3
+const WECHAT_IMAGE_REPLY_VISION_INTERVAL_MS = 5000
 
 let bot = null
 let status = 'idle' // idle | starting | qr_ready | logged_in | connected | error
@@ -348,7 +351,9 @@ function isBareWechatMentionText(text = '') {
 }
 
 function hasWechatImageUnderstandingIntent(text = '') {
-  return IMAGE_UNDERSTANDING_REQUEST_RE.test(String(text || ''))
+  const value = String(text || '')
+  if (IMAGE_REPLY_META_DISCUSSION_RE.test(value)) return false
+  return IMAGE_UNDERSTANDING_REQUEST_RE.test(value)
 }
 
 function buildRecentWechatCombinedText({ groupId = '', senderId = '', senderName = '', fallback = '' } = {}) {
@@ -379,6 +384,98 @@ function getLatestRecentWechatMediaId({ groupId = '', senderId = '', senderName 
     if (mediaId > 0) return mediaId
   }
   return 0
+}
+
+function labelsFromWechatImageRow(row = {}) {
+  try {
+    const parsed = JSON.parse(row.labels_json || '[]')
+    return Array.isArray(parsed) ? parsed.map(v => String(v || '').trim()).filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+function findWechatImageReplyCandidate({ groupId = '', groupName = '', senderId = '', senderName = '', mediaId = 0, text = '', rawText = '', rawPayloadText = '', messageType = '' } = {}) {
+  const id = Number(mediaId || 0)
+  if (id > 0) return { item: { id }, quoteMatched: false, source: 'current_media' }
+  const quote = extractWeChatQuoteContext({ text: text || rawText, rawText: rawPayloadText || rawText || text, messageType })
+  if (quote?.ok && quote.kind === 'image') {
+    const quoted = findWeChatImageMediaForQuote({ groupId, groupName, quote, query: text || rawText, limit: 5 })
+    if (quoted.items?.[0]?.id) return { item: quoted.items[0], quoteMatched: true, source: 'quote' }
+  }
+  const recentMediaId = getLatestRecentWechatMediaId({ groupId, senderId, senderName })
+  if (recentMediaId > 0 && (isBareWechatMentionText(text) || hasWechatImageUnderstandingIntent(text))) {
+    return { item: { id: recentMediaId }, quoteMatched: false, source: 'recent_sender' }
+  }
+  return { item: null, quoteMatched: false, source: '' }
+}
+
+function buildWechatImageReplyContext({ result = {}, item = {}, senderName = '', quoteMatched = false } = {}) {
+  const row = result.item || item || {}
+  const labels = Array.isArray(result.labels) && result.labels.length ? result.labels : labelsFromWechatImageRow(row)
+  return {
+    media_id: Number(result.mediaId || row.id || item.id || 0) || 0,
+    sender_name: row.sender_name || senderName || '',
+    vision_status: result.vision_status || row.vision_status || (result.description ? 'done' : 'pending'),
+    description: String(result.description || row.description || '').trim(),
+    labels,
+    quote_matched: !!quoteMatched,
+    retry_count: Number(result.retryCount || result.retry_count || 0),
+  }
+}
+
+function buildWechatImageEnhancedText({ baseText = '', imageContext = {} } = {}) {
+  const base = String(baseText || '')
+    .replace(/<msg[\s\S]*?<\/msg>/giu, ' ')
+    .replace(/(?:cdnmidimgurl|cdnbigimgurl|aeskey|msgid|newmsgid|length)=["'][^"']*["']/giu, ' ')
+    .replace(/原始大小标记\s*\d+/giu, ' ')
+    .replace(/\[图片\]/gu, ' ')
+    .replace(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/giu, ' ')
+    .replace(/https?:\/\/\S+/giu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const sender = String(imageContext.sender_name || '').trim()
+  const description = String(imageContext.description || '').trim()
+  const labels = Array.isArray(imageContext.labels) ? imageContext.labels.filter(Boolean) : []
+  const imageLine = description ? `刚刚${sender || '群友'}发了一张图片，图片内容：${description}` : ''
+  const labelLine = labels.length ? `图片标签：${labels.join('、')}` : ''
+  return [base, imageLine, labelLine].filter(Boolean).join('\n').trim()
+}
+
+async function prepareWechatImageReplyText({ groupId = '', groupName = '', senderId = '', senderName = '', mediaInfo = null, text = '', rawText = '', rawPayloadText = '', messageType = '', mentionedSelf = false } = {}) {
+  const candidate = findWechatImageReplyCandidate({
+    groupId,
+    groupName,
+    senderId,
+    senderName,
+    mediaId: mediaInfo?.mediaId || 0,
+    text,
+    rawText,
+    rawPayloadText,
+    messageType,
+  })
+  if (!candidate.item?.id) return { ok: true, text, imageContext: null, skipped: true, reason: 'no_image_candidate' }
+  const waitResult = await waitForWeChatImageMediaDescription({
+    mediaId: candidate.item.id,
+    attempts: WECHAT_IMAGE_REPLY_VISION_ATTEMPTS,
+    intervalMs: WECHAT_IMAGE_REPLY_VISION_INTERVAL_MS,
+  })
+  if (!waitResult.ok || !waitResult.description) {
+    console.log(`[WechatImageReply] 放弃图片回复 topic="${groupName}" sender="${senderName}" media_id=${candidate.item.id} mention=${mentionedSelf} status=${waitResult.vision_status || ''} retries=${waitResult.retryCount || 0}`)
+    return { ok: false, text, imageContext: null, reason: 'image_vision_not_ready_after_retries', waitResult }
+  }
+  const imageContext = buildWechatImageReplyContext({
+    result: waitResult,
+    item: candidate.item,
+    senderName,
+    quoteMatched: candidate.quoteMatched,
+  })
+  return {
+    ok: true,
+    text: buildWechatImageEnhancedText({ baseText: text, imageContext }),
+    imageContext,
+    reason: candidate.source || 'image_candidate',
+  }
 }
 
 function rememberRecentWechatGroupVideo({ groupId = '', senderId = '', senderName = '', message = null, messageType = '', text = '', messageId = '' } = {}) {
@@ -1845,6 +1942,21 @@ ${imageVisionText}`.trim() : rawText
         replyText = combinedText
       }
     }
+    const imagePrepared = await prepareWechatImageReplyText({
+      groupId,
+      groupName: topic,
+      senderId: senderId || senderName,
+      senderName,
+      mediaInfo,
+      text: replyText,
+      rawText,
+      rawPayloadText,
+      messageType,
+      mentionedSelf,
+    })
+    if (!imagePrepared.ok) return
+    const imageReplyContext = imagePrepared.imageContext
+    replyText = imagePrepared.text || replyText
 
     console.log(`[Wechaty] 群消息 topic="${topic}"${isSelf ? ' self=true' : ''}${mentionedSelf ? ' mentioned_self=true' : ''} trigger=${replyTrigger.reason} sender="${senderName}": ${replyText.slice(0, 100)}`)
 
@@ -1889,7 +2001,7 @@ ${imageVisionText}`.trim() : rawText
       return
     }
 
-    if (await tryDirectImageUnderstandingReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic, rawText: rawText || replyText, rawPayloadText, messageType })) {
+    if (!imageReplyContext?.media_id && await tryDirectImageUnderstandingReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic, rawText: rawText || replyText, rawPayloadText, messageType })) {
       return
     }
 
@@ -1914,7 +2026,7 @@ ${imageVisionText}`.trim() : rawText
       content: formatGroupLine(senderName, replyText),
       channel: WECHAT_GROUP_CHANNEL,
       external_party_id: groupExternalId,
-      social: { platform: 'wechaty-duty-group', group_name: topic, room_id: room.id, sender_name: senderName, sender_id: senderId || '', mentioned_self: mentionedSelf, reply_trigger: replyTrigger.reason, reply_mention_id: senderId || '', reply_mention_name: senderName || '', user_text: replyText, raw_user_text: rawText || replyText, raw_payload_text: rawPayloadText || '', message_type: messageType || '', wechat_admin: adminVerified, mentioned_members: mentionedMembers },
+      social: { platform: 'wechaty-duty-group', group_name: topic, room_id: room.id, sender_name: senderName, sender_id: senderId || '', mentioned_self: mentionedSelf, reply_trigger: replyTrigger.reason, reply_mention_id: senderId || '', reply_mention_name: senderName || '', user_text: replyText, raw_user_text: rawText || replyText, raw_payload_text: rawPayloadText || '', message_type: messageType || '', wechat_admin: adminVerified, mentioned_members: mentionedMembers, image_context: imageReplyContext },
       timestamp: new Date().toISOString(),
     })
 
@@ -1935,6 +2047,7 @@ ${imageVisionText}`.trim() : rawText
       message_type: messageType || '',
       wechat_admin: adminVerified,
       mentioned_members: mentionedMembers,
+      image_context: imageReplyContext,
     }
     const prompt = await buildWeChatGroupCommandPrompt({
       groupId,
@@ -2253,6 +2366,8 @@ export const __wechatyVideoTestInternals = {
   hasWechatVideoReferenceIntent,
   hasWechatImageUnderstandingIntent,
   getWechatImageUnderstandingGate,
+  buildWechatImageEnhancedText,
+  buildWechatImageReplyContext,
   videoReferenceWindowMs: WECHAT_VIDEO_REFERENCE_WINDOW_MS,
   ageRecentWechatVideosForTest(ms = 0) {
     const delta = Number(ms || 0)

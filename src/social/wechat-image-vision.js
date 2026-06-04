@@ -523,6 +523,43 @@ export async function maybeDescribeWeChatImageMedia({ mediaItem, wait = false } 
   return { ok: true, scheduled: true, id: mediaItem.id }
 }
 
+export async function waitForWeChatImageMediaDescription({ mediaId, attempts = 3, intervalMs = 5000 } = {}) {
+  ensureSchema()
+  const id = Number(mediaId || 0)
+  if (!id) return { ok: false, error: 'missing_media_id', retryCount: 0 }
+  const db = getDB()
+  const maxAttempts = Math.min(Math.max(Number(attempts ?? 3), 1), 10)
+  const waitMs = Math.min(Math.max(Number(intervalMs ?? 5000), 0), 30000)
+  let last = null
+  for (let i = 0; i < maxAttempts; i += 1) {
+    last = db.prepare(`SELECT * FROM wechat_group_media_items WHERE id = ?`).get(id)
+    if (!last) return { ok: false, error: 'media not found', retryCount: i + 1 }
+    if (last.description) {
+      return {
+        ok: true,
+        mediaId: id,
+        description: last.description,
+        labels: (() => { try { return JSON.parse(last.labels_json || '[]') } catch { return [] } })(),
+        vision_status: last.vision_status || 'done',
+        retryCount: i + 1,
+        item: last,
+      }
+    }
+    if (i < maxAttempts - 1 && waitMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, waitMs))
+    }
+  }
+  return {
+    ok: false,
+    mediaId: id,
+    description: '',
+    labels: [],
+    vision_status: last?.vision_status || 'pending',
+    vision_error: last?.vision_error || '',
+    retryCount: maxAttempts,
+    item: last,
+  }
+}
 function normalizeMediaStatusFilter(status = '') {
   const value = String(status || '').trim().toLowerCase()
   if (['done', 'described', 'parsed'].includes(value)) return 'done'
