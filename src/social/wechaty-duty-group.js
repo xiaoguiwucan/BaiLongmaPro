@@ -2,10 +2,11 @@ import qrcodeTerminal from 'qrcode-terminal'
 import { WechatyBuilder, ScanStatus } from 'wechaty'
 import { PuppetWechat4u } from 'wechaty-puppet-wechat4u'
 import { FileBox } from 'file-box'
-import { archiveWeChatGroupMessage, buildWeChatGroupCommandPrompt, formatGroupLine, makeWeChatGroupExternalId, WECHAT_GROUP_CHANNEL } from './wechat-groups.js'
-import { getWechatyDutyGroupConfig, setWechatyDutyGroupConfig, setWechatyDutyGroupRuntime } from '../config.js'
+import { archiveWeChatGroupMessage, buildWeChatGroupCommandPrompt, formatGroupLine, isGroupSummaryRequest, makeWeChatGroupExternalId, WECHAT_GROUP_CHANNEL } from './wechat-groups.js'
+import { getWechatyDutyGroupConfig, getWeChatGroupDigestConfig, setWechatyDutyGroupConfig, setWechatyDutyGroupRuntime } from '../config.js'
 import { recordWeChatGroupMessage, recordWeChatGroupAssistantReply, recordWeChatGroupExplicitMemories } from './wechat-group-memory.js'
-import { isWeChatInternalIdLike, listWeChatGroupMembers, normalizeWechatMessageType, normalizeWeChatGroupDisplayText, recordWeChatGroupActivity, upsertWeChatGroupMemberName } from './wechat-group-stats.js'
+import { buildWeChatGroupStatsDigest, getWeChatGroupStats, isWeChatInternalIdLike, listWeChatGroupMembers, normalizeWechatMessageType, normalizeWeChatGroupDisplayText, recordWeChatGroupActivity, upsertWeChatGroupMemberName } from './wechat-group-stats.js'
+import { renderWeChatGroupStatsPosterPng } from './wechat-group-report-renderer.js'
 import { searchMemes } from './meme-search.js'
 import { generateImageForWechat, isWechatImageGenerationRequest } from './image-generation-skill.js'
 import { describeWeChatImageMedia, findWeChatImageMediaForQuote, findWeChatImageMediaForRequest, getWeChatImageVisionStatus, maybeDescribeWeChatImageMedia, resolveWeChatImageMediaFile, updateWeChatImageMediaItem, upsertWeChatImageMediaItem } from './wechat-image-vision.js'
@@ -1830,6 +1831,10 @@ ${imageVisionText}`.trim() : rawText
       })
       .catch(err => console.warn(`[Honcho] 显式群记忆写入失败：${err?.message || err}`))
 
+    if (await tryDirectGroupSummaryPosterReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic })) {
+      return
+    }
+
     if (await tryDirectImageTaggingReply(room, replyText, { senderId: senderId || '', senderName, groupId, groupName: topic, rawText: rawText || replyText, rawPayloadText, messageType })) {
       return
     }
@@ -1915,6 +1920,75 @@ ${imageVisionText}`.trim() : rawText
   }
 }
 
+
+function includeDigestConfig(cfg = {}) {
+  return {
+    messageLeaderboard: cfg.messageLeaderboard !== false,
+    imageLeaderboard: cfg.imageLeaderboard !== false,
+    emojiLeaderboard: cfg.emojiLeaderboard !== false,
+    linkLeaderboard: cfg.linkLeaderboard !== false,
+    bragLeaderboard: cfg.bragLeaderboard !== false,
+  }
+}
+
+function resolveDirectGroupSummaryMode(text = '') {
+  return /(?:今天|今日|当天|本日|日报|日总结|从早|上午|下午|晚上|凌晨)/u.test(String(text || '')) ? 'daily' : 'interval'
+}
+
+function resolveDirectGroupSummaryRange(mode = 'interval', cfg = {}, now = new Date()) {
+  if (mode === 'daily') {
+    const from = new Date(now)
+    from.setHours(0, 0, 0, 0)
+    return { from: from.toISOString(), to: now.toISOString() }
+  }
+  const minutes = Math.max(Number(cfg.intervalMinutes || 180), 30)
+  return { from: new Date(now.getTime() - minutes * 60 * 1000).toISOString(), to: now.toISOString() }
+}
+
+async function tryDirectGroupSummaryPosterReply(room, text = '', { senderId = '', senderName = '', groupId = '', groupName = '' } = {}) {
+  if (!isGroupSummaryRequest(text)) return false
+  const cfg = getWeChatGroupDigestConfig()
+  const mode = resolveDirectGroupSummaryMode(text)
+  const range = resolveDirectGroupSummaryRange(mode, cfg)
+  const stats = getWeChatGroupStats({ groupId, groupName, from: range.from, to: range.to, limit: 8 })
+  const summary = buildWeChatGroupStatsDigest({ ...stats, group_name: groupName || stats.group_name }, { mode, include: includeDigestConfig(cfg) })
+  let poster = null
+  try {
+    poster = await renderWeChatGroupStatsPosterPng(
+      { ...stats, group_name: groupName || stats.group_name },
+      { templateId: cfg.reportTemplate || 'guochao-red-gold' }
+    )
+    if (poster?.ok && poster.filePath) {
+      const sent = await sendWechatyDutyGroupMessage(room.id, '', {
+        imageFilePaths: [poster.filePath],
+        timeoutMs: 45000,
+      })
+      if (sent?.ok) {
+        recordWeChatGroupAssistantReply({
+          groupId,
+          groupName,
+          reply: `[群聊图片战报] ${cfg.reportTemplate || 'guochao-red-gold'} ${poster.filePath}`,
+          targetMemberName: senderName,
+          source: 'wechaty-direct-group-summary',
+        }).catch(() => {})
+        return true
+      }
+      console.warn(`[WechatyDigest] 群内总结图片发送失败，回退文字：${sent?.error || sent?.reason || 'unknown'}`)
+    }
+  } catch (err) {
+    poster = { ok: false, error: err?.message || String(err) }
+    console.warn(`[WechatyDigest] 群内总结长图生成失败，回退文字：${poster.error}`)
+  }
+  await sendWechatyDutyGroupMessage(room.id, summary, { mentionId: senderId, mentionName: senderName })
+  recordWeChatGroupAssistantReply({
+    groupId,
+    groupName,
+    reply: summary,
+    targetMemberName: senderName,
+    source: 'wechaty-direct-group-summary-fallback',
+  }).catch(() => {})
+  return true
+}
 
 function extractMemeQueryFromWechatText(text = '') {
   return String(text || '')
