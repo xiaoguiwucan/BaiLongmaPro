@@ -247,6 +247,17 @@ async function describeImage({ buffer, mimeType }) {
   const base64 = buffer.toString('base64')
   const timeoutSeconds = Math.min(Math.max(Number(cfg.apiTimeoutSeconds || 45), 5), 180)
   const errors = []
+  const sanitizeRequestParams = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    const blocked = new Set(['messages', 'input', 'image_url'])
+    const out = {}
+    for (const [key, val] of Object.entries(value)) {
+      if (!key || blocked.has(key)) continue
+      if (val === undefined || typeof val === 'function') continue
+      out[key] = val
+    }
+    return out
+  }
   for (const runtime of runtimes) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000)
@@ -255,6 +266,7 @@ async function describeImage({ buffer, mimeType }) {
         method: 'POST',
         headers: { Authorization: `Bearer ${runtime.apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
+          ...sanitizeRequestParams(runtime.requestParams),
           model: runtime.model,
           temperature: 0.1,
           max_tokens: 650,

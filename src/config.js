@@ -2126,6 +2126,25 @@ function normalizeSkillBaseUrl(value = '', fallback = '') {
   return String(value || fallback || '').trim().replace(/\/$/, '')
 }
 
+function normalizeSkillRequestParams(value = {}) {
+  const raw = value && typeof value === 'object'
+    ? value
+    : (() => {
+        const text = String(value || '').trim()
+        if (!text) return {}
+        try { return JSON.parse(text) } catch { return {} }
+      })()
+  if (!raw || Array.isArray(raw) || typeof raw !== 'object') return {}
+  const blocked = new Set(['messages', 'input', 'image_url'])
+  const out = {}
+  for (const [key, val] of Object.entries(raw)) {
+    if (!key || blocked.has(key)) continue
+    if (val === undefined || typeof val === 'function') continue
+    out[key] = val
+  }
+  return out
+}
+
 function makeSkillChannelId(prefix = 'skill', raw = {}, index = 0) {
   const existing = String(raw.id || raw.channelId || raw.channel_id || '').trim()
   if (existing) return existing
@@ -2139,6 +2158,7 @@ function normalizeSkillChannel(raw = {}, defaults = {}, { prefix = 'skill', inde
   const model = String(raw.model || defaults.model || '').trim()
   const apiKey = String(raw.apiKey || raw.api_key || (envKey ? process.env[envKey] : '') || fallbackKey || '').trim()
   const name = String(raw.name || raw.label || `${model || '模型'} @ ${baseUrl || '未配置'}`).trim().slice(0, 80) || `渠道 ${index + 1}`
+  const requestParams = normalizeSkillRequestParams(raw.requestParams || raw.request_params || raw.extraParams || raw.extra_params)
   return {
     id,
     name,
@@ -2147,6 +2167,7 @@ function normalizeSkillChannel(raw = {}, defaults = {}, { prefix = 'skill', inde
     baseUrl,
     model,
     apiKey,
+    requestParams,
     configured: !!apiKey,
   }
 }
@@ -2170,6 +2191,9 @@ function mergeSkillChannelsWithExisting(incoming = [], existing = [], { prefix =
     const raw = { ...(item || {}) }
     if (!Object.prototype.hasOwnProperty.call(raw, 'apiKey') && !Object.prototype.hasOwnProperty.call(raw, 'api_key')) {
       raw.apiKey = old?.apiKey || old?.api_key || ''
+    }
+    if (!Object.prototype.hasOwnProperty.call(raw, 'requestParams') && !Object.prototype.hasOwnProperty.call(raw, 'request_params')) {
+      raw.requestParams = old?.requestParams || old?.request_params || {}
     }
     return normalizeSkillChannel(raw, defaults, { prefix, index, envKey, fallbackKey })
   })
@@ -2492,6 +2516,7 @@ export async function testSkillModelChannel({ skill = 'imageGeneration', channel
           Accept: 'application/json',
         },
         body: JSON.stringify({
+          ...normalizeSkillRequestParams(normalized.requestParams),
           model: normalized.model,
           temperature: 0,
           max_tokens: 40,

@@ -263,6 +263,18 @@ function normalizeRuntimeBaseURL(value = '') {
   return String(value || '').trim().replace(/\/$/, '')
 }
 
+function normalizeVisionRequestParams(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const blocked = new Set(['messages', 'input', 'image_url'])
+  const out = {}
+  for (const [key, val] of Object.entries(value)) {
+    if (!key || blocked.has(key)) continue
+    if (val === undefined || typeof val === 'function') continue
+    out[key] = val
+  }
+  return out
+}
+
 function runtimeKey(runtime = {}) {
   // source 只表示“来自当前模型/LLM 列表/识图备用”，不能参与去重。
   // 否则同一个中转 + 同一个模型会被当前模型和 LLM Profile 重复调用，图片解析失败时会白等一轮超时。
@@ -283,7 +295,7 @@ function getVisionRuntimeCandidates(cfg = getSkillImageVisionCredentials()) {
   // 显式“识图模型”是用户在图片理解菜单里专门配置的模型，必须优先于普通 LLM。
   // 否则当前聊天模型虽然名字支持视觉，但中转实际可能空返回/超时，会拖慢所有后台图片解析。
   for (const channel of getSkillImageVisionRuntimeCandidates()) {
-    push({ provider: channel.provider || 'vision', model: channel.model, apiKey: channel.apiKey, baseURL: channel.baseUrl, source: `skill:${channel.name || channel.id || channel.model}` })
+    push({ provider: channel.provider || 'vision', model: channel.model, apiKey: channel.apiKey, baseURL: channel.baseUrl, requestParams: channel.requestParams, source: `skill:${channel.name || channel.id || channel.model}` })
   }
 
   if (cfg.failoverEnabled === false) return candidates
@@ -415,6 +427,7 @@ async function callVisionModel(row, runtime, cfg) {
         Accept: 'application/json',
       },
       body: JSON.stringify({
+        ...normalizeVisionRequestParams(runtime.requestParams),
         model: runtime.model,
         temperature: 0.1,
         max_tokens: 420,
@@ -560,6 +573,7 @@ export async function waitForWeChatImageMediaDescription({ mediaId, attempts = 3
     item: last,
   }
 }
+
 function normalizeMediaStatusFilter(status = '') {
   const value = String(status || '').trim().toLowerCase()
   if (['done', 'described', 'parsed'].includes(value)) return 'done'

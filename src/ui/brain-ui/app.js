@@ -4980,6 +4980,7 @@ function initTTSSettings() {
       configured: !!row.configured,
       apiKeyHint: String(row.apiKeyHint || row.api_key_hint || "").trim(),
       modelOptions: Array.isArray(row.modelOptions) ? row.modelOptions : [],
+      requestParams: row.requestParams && typeof row.requestParams === "object" && !Array.isArray(row.requestParams) ? row.requestParams : {},
       apiKey: "",
     })).sort((a, b) => {
       const activeId = String(config.activeChannelId || "").trim();
@@ -5025,6 +5026,7 @@ function initTTSSettings() {
     list.innerHTML = channels.map((ch, index) => {
       const isActive = ch.id === state.activeId || (!state.activeId && index === 0);
       const keyText = ch.apiKeyHint || (ch.configured ? "已保存" : "未填写");
+      const requestParamsText = Object.keys(ch.requestParams || {}).length ? JSON.stringify(ch.requestParams, null, 2) : "";
       const channelModels = (Array.isArray(ch.modelOptions) ? ch.modelOptions : [])
         .map(item => typeof item === "string" ? { value: item, label: item } : { value: item.value || item.id || item.model || "", label: item.label || item.name || item.value || item.id || item.model || "" })
         .filter(item => item.value);
@@ -5066,6 +5068,7 @@ function initTTSSettings() {
             <label>Base URL<input class="settings-input" data-field="baseUrl" type="text" value="${escapeHtml(ch.baseUrl || "")}" placeholder="https://.../v1"></label>
             <label>模型<select class="settings-select" data-field="model">${options}</select></label>
             <label>API Key<input class="settings-input" data-field="apiKey" type="password" value="" placeholder="${escapeHtml(ch.configured ? `已保存 ${keyText}，留空保留；输入新 Key 则替换` : "未保存，填写后本机保存") }"></label>
+            <label style="grid-column:1/-1;">自定义请求参数 JSON<textarea class="settings-input" data-field="requestParamsText" rows="3" placeholder='例如：{"req_key":"high_aes_general_v30l_zt2i"}'>${escapeHtml(requestParamsText)}</textarea></label>
           </div>
         </div>
       `;
@@ -5093,6 +5096,7 @@ function initTTSSettings() {
       card.querySelectorAll("[data-field]").forEach(input => {
         const field = input.dataset.field;
         if (field === "enabled") ch.enabled = input.checked;
+        else if (field === "requestParamsText") ch.requestParamsText = input.value;
         else ch[field] = input.value;
       });
       if (card.querySelector("[data-action='active']")?.checked) {
@@ -5180,6 +5184,17 @@ function initTTSSettings() {
   function buildSkillChannelsPayload(kind = "image") {
     syncSkillChannelInputs(kind);
     const state = getSkillChannelState(kind);
+    const parseParams = (text = "") => {
+      const raw = String(text || "").trim();
+      if (!raw) return {};
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("必须是 JSON 对象");
+        return parsed;
+      } catch (err) {
+        throw new Error(`自定义请求参数 JSON 格式错误：${err?.message || err}`);
+      }
+    };
     return {
       activeChannelId: state.activeId,
       channels: state.channels.map(ch => ({
@@ -5189,6 +5204,7 @@ function initTTSSettings() {
         provider: ch.provider || "custom",
         baseUrl: ch.baseUrl,
         model: ch.model,
+        requestParams: parseParams(ch.requestParamsText || (ch.requestParams ? JSON.stringify(ch.requestParams) : "")),
         ...(String(ch.apiKey || "").trim() ? { apiKey: String(ch.apiKey || "").trim() } : {}),
       })),
     };
@@ -5328,7 +5344,13 @@ function initTTSSettings() {
   }
 
   async function saveSkillImageConfig() {
-    const channelPayload = buildSkillChannelsPayload("image");
+    let channelPayload;
+    try {
+      channelPayload = buildSkillChannelsPayload("image");
+    } catch (err) {
+      showFeedback(skillImageFeedback, err?.message || "渠道配置格式错误", true);
+      return;
+    }
     const payload = {
       enabled: skillImageEnabled?.checked !== false,
       failoverEnabled: skillImageFailover?.checked !== false,
@@ -5359,7 +5381,13 @@ function initTTSSettings() {
   }
 
   async function saveSkillVisionConfig() {
-    const channelPayload = buildSkillChannelsPayload("vision");
+    let channelPayload;
+    try {
+      channelPayload = buildSkillChannelsPayload("vision");
+    } catch (err) {
+      showFeedback(skillVisionFeedback, err?.message || "渠道配置格式错误", true);
+      return;
+    }
     const payload = {
       enabled: skillVisionEnabled?.checked !== false,
       autoDescribe: true,
@@ -5389,7 +5417,13 @@ function initTTSSettings() {
   }
 
   async function saveSkillVideoConfig() {
-    const channelPayload = buildSkillChannelsPayload("video");
+    let channelPayload;
+    try {
+      channelPayload = buildSkillChannelsPayload("video");
+    } catch (err) {
+      showFeedback(skillVideoFeedback, err?.message || "渠道配置格式错误", true);
+      return;
+    }
     const payload = {
       enabled: skillVideoEnabled?.checked !== false,
       failoverEnabled: skillVideoFailover?.checked !== false,
