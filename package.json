@@ -26,6 +26,7 @@
     "test:wechat-memory": "node scripts/test-wechat-memory-extractor.mjs",
     "test:wechat-ambient-reply": "node scripts/test-wechat-ambient-reply.mjs",
     "test:local-wechat-memory": "node scripts/run-electron-node.mjs scripts/test-local-wechat-memory.mjs",
+    "test:wechat-group-backup": "node scripts/run-electron-node.mjs scripts/test-wechat-group-backup.mjs",
     "test:social-targets": "node scripts/test-social-targets.mjs",
     "test:wechat-group-archive-config": "node scripts/run-electron-node.mjs scripts/test-wechat-group-archive-config.mjs",
     "test:wechat-record-all": "node scripts/run-electron-node.mjs scripts/test-wechat-record-all.mjs",

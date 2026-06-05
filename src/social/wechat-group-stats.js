@@ -43,6 +43,10 @@ const XML_LIKE_RE = /^<\?xml|^<msg\b|^<appmsg\b|^<sysmsg\b/iu
 let schemaReady = false
 let lastArchiveRetrievalMs = 0
 
+export function ensureWeChatGroupStatsSchemaForBackup() {
+  ensureSchema()
+}
+
 function clampChunkConfig() {
   const cfg = getWeChatGroupArchiveConfig()
   const size = Number(cfg.longMessageChunkSize || 1800)

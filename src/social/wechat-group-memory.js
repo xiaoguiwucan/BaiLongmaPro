@@ -86,6 +86,10 @@ function sessionIdFor(gid = '') {
 
 let localSchemaReady = false
 
+export function ensureLocalWeChatGroupMemorySchemaForBackup() {
+  ensureLocalMemorySchema()
+}
+
 function deleteLocalFtsRow(db, table, rowid) {
   try { db.prepare(`DELETE FROM ${table} WHERE rowid = ?`).run(rowid) } catch {}
 }

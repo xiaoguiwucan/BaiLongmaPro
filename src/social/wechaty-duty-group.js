@@ -1710,6 +1710,80 @@ export async function listWechatyDutyGroupRooms() {
   }
 }
 
+export async function listWechatyDutyGroupRoomsForBackup() {
+  if (!bot || !isLoginActive()) {
+    const reason = status === 'qr_ready'
+      ? 'waiting for qr scan'
+      : status === 'starting'
+        ? 'wechaty-duty-group starting'
+        : 'wechaty-duty-group not logged in'
+    return {
+      ok: false,
+      status,
+      rooms: [],
+      rooms_stale: false,
+      online: false,
+      login_user: '',
+      last_login_user: previousLoginUser(),
+      error: reason,
+      hint: '导入备份需要当前微信号在线，并实时读取真实群列表。',
+    }
+  }
+  try {
+    const rooms = await bot.Room.findAll()
+    const items = []
+    for (const room of rooms || []) {
+      const topic = await safeTopic(room)
+      const id = String(room?.id || '').trim()
+      if (!topic && !id) continue
+      items.push({
+        id,
+        group_id: id ? `wechaty:${id}` : '',
+        topic: topic || id,
+        selected: isAllowedGroupTopic(topic),
+      })
+    }
+    if (!items.length) {
+      return {
+        ok: false,
+        status: 'rooms_pending',
+        rooms: [],
+        rooms_stale: false,
+        online: isTrulyOnline(),
+        login_user: previousLoginUser(),
+        last_login_user: previousLoginUser(),
+        error: '本次没有读取到真实微信群列表，不能用于备份导入校验。',
+        hint: '请确认微信已登录并稍后重试，或重新扫码。',
+      }
+    }
+    return {
+      ok: true,
+      status,
+      rooms: items,
+      rooms_stale: false,
+      online: isTrulyOnline(),
+      login_user: previousLoginUser(),
+      last_login_user: previousLoginUser(),
+      last_room_refresh_at: new Date().toISOString(),
+      fresh: true,
+      deduped: false,
+      hint: '已读取当前微信号真实群列表，未按群名去重。',
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      status,
+      rooms: [],
+      rooms_stale: false,
+      online: false,
+      login_user: isLoginActive() ? previousLoginUser() : '',
+      last_login_user: previousLoginUser(),
+      error: err?.message || String(err),
+      hint: '读取真实群列表失败，不能用于备份导入校验。',
+    }
+  }
+}
+
 export async function restartWechatyDutyGroupConnector(opts = {}) {
   await stopWechatyDutyGroupConnector()
   return startWechatyDutyGroupConnector(opts)

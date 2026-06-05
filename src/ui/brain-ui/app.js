@@ -2244,6 +2244,20 @@ function initTTSSettings() {
   const wechatyRecordsSummary = document.getElementById("wechaty-records-summary");
   const wechatyRecordsList = document.getElementById("wechaty-records-list");
   const wechatyRecordsMoreBtn = document.getElementById("wechaty-records-more-btn");
+  const wechatyBackupRefreshBtn = document.getElementById("wechaty-backup-refresh-btn");
+  const wechatyBackupExportBtn = document.getElementById("wechaty-backup-export-btn");
+  const wechatyBackupImportFile = document.getElementById("wechaty-backup-import-file");
+  const wechatyBackupSummary = document.getElementById("wechaty-backup-summary");
+  const wechatyBackupSearch = document.getElementById("wechaty-backup-search");
+  const wechatyBackupSelectAllBtn = document.getElementById("wechaty-backup-select-all-btn");
+  const wechatyBackupClearBtn = document.getElementById("wechaty-backup-clear-btn");
+  const wechatyBackupIncludeMedia = document.getElementById("wechaty-backup-include-media");
+  const wechatyBackupIncludeDeleted = document.getElementById("wechaty-backup-include-deleted");
+  const wechatyBackupGroupList = document.getElementById("wechaty-backup-group-list");
+  const wechatyBackupAllowNameMatch = document.getElementById("wechaty-backup-allow-name-match");
+  const wechatyBackupImportBtn = document.getElementById("wechaty-backup-import-btn");
+  const wechatyBackupPreview = document.getElementById("wechaty-backup-preview");
+  const wechatyBackupResult = document.getElementById("wechaty-backup-result");
   const wechatyQrArea = document.getElementById("wechaty-qr-area");
   const wechatyQrImg = document.getElementById("wechaty-qr-img");
   const wechatyOfflineQrNotifyEnabled = document.getElementById("wechaty-offline-qr-notify-enabled");
@@ -3489,6 +3503,7 @@ function initTTSSettings() {
       setTimeout(() => loadWechatyAdminMembers({ silent: true }), 700);
       setTimeout(() => loadWechatyKnownGroups({ silent: true }), 900);
       setTimeout(() => loadWechatyHotspotSettings({ silent: true }), 1100);
+      setTimeout(() => loadWechatyBackupGroups({ silent: true }), 1300);
       for (const [statusId, keys] of Object.entries(SOCIAL_PLATFORM_STATUS)) {
         const el = document.getElementById(statusId);
         if (!el) continue;
@@ -3539,6 +3554,11 @@ function initTTSSettings() {
   let wechatyRecordsHasMore = false;
   let wechatyRecordsLastQuery = null;
   let wechatyRecordsToAutoNow = true;
+  let wechatyBackupGroups = [];
+  let wechatyBackupSelectedGroups = new Set();
+  let wechatyBackupPayload = null;
+  let wechatyBackupPreviewGroups = [];
+  let wechatyBackupSelectedImportGroups = new Set();
   let wechatyStatsAutoRefreshTimer = null;
   const WECHATY_AMBIENT_LEVELS = [
     { id: "quiet", label: "安静" },
@@ -4662,6 +4682,265 @@ function initTTSSettings() {
     }
   }
 
+  function backupCountText(counts = {}) {
+    const parts = [
+      `聊天 ${Number(counts.activity || 0)}`,
+      `消息 ${Number(counts.messages || 0)}`,
+      `记忆 ${Number(counts.memory_items || 0)}`,
+      `成员 ${Number(counts.member_names || 0)}`,
+      `身份 ${Number(counts.member_identities || 0) + Number(counts.member_identity_aliases || 0)}`,
+      `图片 ${Number(counts.media_items || 0)}`,
+    ];
+    return parts.join(' · ');
+  }
+
+  function showWechatyBackupFeedback(message, isError = false) {
+    showFeedback(dbFeedback || wechatyDigestFeedback || wechatyDutyFeedback, message, isError);
+  }
+
+  function renderWechatyBackupGroups() {
+    if (!wechatyBackupGroupList || !wechatyBackupSummary) return;
+    const keyword = String(wechatyBackupSearch?.value || "").trim().toLowerCase();
+    const groups = wechatyBackupGroups.filter(group => {
+      const hay = `${group.group_name || ""} ${group.group_id || ""}`.toLowerCase();
+      return !keyword || hay.includes(keyword);
+    });
+    const selectedCount = wechatyBackupGroups.filter(group => wechatyBackupSelectedGroups.has(group.backup_group_key)).length;
+    const totalRows = wechatyBackupGroups.reduce((sum, group) => sum + Number(group.total_rows || 0), 0);
+    const mediaBytes = wechatyBackupGroups.reduce((sum, group) => sum + Number(group.media_bytes_estimate || 0), 0);
+    wechatyBackupSummary.textContent = wechatyBackupGroups.length
+      ? `可备份 ${wechatyBackupGroups.length} 个群 · 已选 ${selectedCount} 个 · 总计 ${totalRows} 行 · 媒体约 ${formatBytes(mediaBytes)}`
+      : '暂无可备份的微信群数据。';
+    if (!groups.length) {
+      wechatyBackupGroupList.innerHTML = `<div class="wechaty-empty">${wechatyBackupGroups.length ? "没有匹配的群" : "暂无可备份群组"}</div>`;
+      return;
+    }
+    wechatyBackupGroupList.innerHTML = groups.map(group => {
+      const key = group.backup_group_key || "";
+      const checked = wechatyBackupSelectedGroups.has(key) ? "checked" : "";
+      return `<label class="wechaty-backup-group">
+        <input type="checkbox" data-backup-group="${escapeHtml(key)}" ${checked}>
+        <span>
+          <b>${escapeHtml(group.group_name || group.group_id || "未命名群")}</b>
+          <em>${escapeHtml(group.group_id || "")}</em>
+          <small>${escapeHtml(backupCountText(group.counts || {}))}</small>
+        </span>
+        <strong>${escapeHtml(formatBytes(group.media_bytes_estimate || 0))}</strong>
+      </label>`;
+    }).join("");
+  }
+
+  async function loadWechatyBackupGroups({ silent = false } = {}) {
+    if (!wechatyBackupGroupList) return;
+    if (wechatyBackupRefreshBtn) wechatyBackupRefreshBtn.disabled = true;
+    try {
+      const data = await fetch(`${API}/social/wechat-groups/backup/groups`).then(r => r.json());
+      if (!data.ok) throw new Error(data.error || '备份群组加载失败');
+      wechatyBackupGroups = Array.isArray(data.groups) ? data.groups : [];
+      const validKeys = new Set(wechatyBackupGroups.map(group => group.backup_group_key));
+      wechatyBackupSelectedGroups = new Set([...wechatyBackupSelectedGroups].filter(key => validKeys.has(key)));
+      renderWechatyBackupGroups();
+      if (!silent) showWechatyBackupFeedback(`已加载 ${wechatyBackupGroups.length} 个可备份群`);
+    } catch (err) {
+      if (wechatyBackupSummary) wechatyBackupSummary.textContent = err?.message || '备份群组加载失败';
+      if (wechatyBackupGroupList) wechatyBackupGroupList.innerHTML = `<div class="wechaty-empty">${escapeHtml(err?.message || '备份群组加载失败')}</div>`;
+      if (!silent) showWechatyBackupFeedback(err?.message || '备份群组加载失败', true);
+    } finally {
+      if (wechatyBackupRefreshBtn) wechatyBackupRefreshBtn.disabled = false;
+    }
+  }
+
+  function filenameFromDisposition(header = "", fallback = "bailongma-wechat-groups-backup.json") {
+    const match = String(header || "").match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+    if (!match) return fallback;
+    try { return decodeURIComponent(match[1].replace(/"/g, "")); } catch { return match[1].replace(/"/g, "") || fallback; }
+  }
+
+  async function exportWechatyGroupBackup() {
+    const groupIds = [...wechatyBackupSelectedGroups];
+    if (!groupIds.length) {
+      showWechatyBackupFeedback('请选择要导出的群', true);
+      return;
+    }
+    if (wechatyBackupExportBtn) wechatyBackupExportBtn.disabled = true;
+    try {
+      const res = await fetch(`${API}/social/wechat-groups/backup/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          group_ids: groupIds,
+          include_media_files: wechatyBackupIncludeMedia?.checked !== false,
+          include_deleted_memory: wechatyBackupIncludeDeleted?.checked !== false,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '导出失败');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filenameFromDisposition(res.headers.get('Content-Disposition') || '');
+      a.click();
+      URL.revokeObjectURL(url);
+      showWechatyBackupFeedback(`群组备份已导出：${formatBytes(blob.size)}`);
+    } catch (err) {
+      showWechatyBackupFeedback(err?.message || '导出失败', true);
+    } finally {
+      if (wechatyBackupExportBtn) wechatyBackupExportBtn.disabled = false;
+    }
+  }
+
+  function previewStatusLabel(group = {}) {
+    const map = {
+      exact_id: '精确匹配',
+      unique_name: '唯一群名',
+      ambiguous_name: '同名冲突',
+      missing: '当前账号无此群',
+      wechat_not_ready: '微信未就绪',
+      invalid_payload: '备份损坏',
+    };
+    return map[group.match_status] || group.match_status || '未知';
+  }
+
+  function canSelectPreviewGroup(group = {}) {
+    if (!group.importable) return false;
+    if (group.match_status === 'unique_name' && !wechatyBackupAllowNameMatch?.checked) return false;
+    return true;
+  }
+
+  function updateWechatyBackupImportButton() {
+    if (!wechatyBackupImportBtn) return;
+    const count = wechatyBackupPreviewGroups.filter(group => wechatyBackupSelectedImportGroups.has(group.backup_group_key) && canSelectPreviewGroup(group)).length;
+    wechatyBackupImportBtn.disabled = !wechatyBackupPayload || count <= 0;
+    wechatyBackupImportBtn.textContent = count > 0 ? `导入选中 ${count} 个群` : '导入选中';
+  }
+
+  function renderWechatyBackupPreview() {
+    if (!wechatyBackupPreview) return;
+    if (!wechatyBackupPreviewGroups.length) {
+      wechatyBackupPreview.innerHTML = '选择备份 JSON 后显示匹配结果。';
+      updateWechatyBackupImportButton();
+      return;
+    }
+    wechatyBackupPreview.innerHTML = wechatyBackupPreviewGroups.map(group => {
+      const selectable = canSelectPreviewGroup(group);
+      const checked = wechatyBackupSelectedImportGroups.has(group.backup_group_key) && selectable ? "checked" : "";
+      const disabled = selectable ? "" : "disabled";
+      const klass = group.match_status === 'exact_id'
+        ? 'ok'
+        : group.match_status === 'unique_name'
+          ? 'warn'
+          : 'bad';
+      const target = group.target_group_name ? `${group.target_group_name} · ${group.target_group_id || group.target_room_id || ""}` : (group.reason || '不可导入');
+      return `<label class="wechaty-backup-preview-row ${klass}">
+        <input type="checkbox" data-import-group="${escapeHtml(group.backup_group_key || "")}" ${checked} ${disabled}>
+        <span>
+          <b>${escapeHtml(group.source_group_name || group.source_group_id || "未命名群")}</b>
+          <em>${escapeHtml(backupCountText(group.counts || {}))}</em>
+          <small>${escapeHtml(target)}</small>
+        </span>
+        <strong>${escapeHtml(previewStatusLabel(group))}</strong>
+      </label>`;
+    }).join("");
+    updateWechatyBackupImportButton();
+  }
+
+  async function previewWechatyGroupBackup(file) {
+    if (!file) return;
+    if (wechatyBackupImportBtn) wechatyBackupImportBtn.disabled = true;
+    if (wechatyBackupResult) wechatyBackupResult.innerHTML = '';
+    try {
+      wechatyBackupPayload = JSON.parse(await file.text());
+      const res = await fetch(`${API}/social/wechat-groups/backup/import/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(wechatyBackupPayload),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '备份预览失败');
+      wechatyBackupPreviewGroups = Array.isArray(data.groups) ? data.groups : [];
+      wechatyBackupSelectedImportGroups = new Set(
+        wechatyBackupPreviewGroups
+          .filter(group => group.importable && group.match_status === 'exact_id')
+          .map(group => group.backup_group_key)
+      );
+      renderWechatyBackupPreview();
+      const ready = data.room_status?.ok ? `可导入 ${data.importable_count || 0} 个群` : (data.room_status?.error || '当前微信未就绪');
+      showWechatyBackupFeedback(`备份预览完成：${ready}`, !data.room_status?.ok);
+    } catch (err) {
+      wechatyBackupPayload = null;
+      wechatyBackupPreviewGroups = [];
+      wechatyBackupSelectedImportGroups = new Set();
+      if (wechatyBackupPreview) wechatyBackupPreview.innerHTML = `<div class="wechaty-empty">${escapeHtml(err?.message || '备份预览失败')}</div>`;
+      showWechatyBackupFeedback(err?.message || '备份预览失败', true);
+      updateWechatyBackupImportButton();
+    } finally {
+      if (wechatyBackupImportFile) wechatyBackupImportFile.value = '';
+    }
+  }
+
+  function renderWechatyBackupImportResult(data = {}) {
+    if (!wechatyBackupResult) return;
+    if (!data.ok && !data.groups?.length) {
+      wechatyBackupResult.innerHTML = `<div class="wechaty-empty">${escapeHtml(data.error || '没有导入任何群')}</div>`;
+      return;
+    }
+    const rows = (data.groups || []).map(group => {
+      const inserted = ['activity', 'messages', 'memory_items', 'member_names', 'member_identities', 'member_identity_aliases', 'media_items']
+        .map(key => `${key.replace(/_/g, ' ')} ${Number(group[key]?.inserted || 0)}/${Number(group[key]?.skipped || 0)}`)
+        .join(' · ');
+      const errors = Array.isArray(group.errors) && group.errors.length
+        ? `<p>${escapeHtml(group.errors.join('；'))}</p>`
+        : '';
+      return `<article class="wechaty-backup-result-row">
+        <b>${escapeHtml(group.target_group_name || group.source_group_name || group.backup_group_key || '')}</b>
+        <span>${escapeHtml(inserted)} · 媒体恢复 ${Number(group.media_files_restored || 0)} / 缺失 ${Number(group.media_files_missing || 0)}</span>
+        ${errors}
+      </article>`;
+    }).join("");
+    const skipped = Array.isArray(data.skipped_groups) && data.skipped_groups.length
+      ? `<div class="wechaty-backup-skipped">跳过：${escapeHtml(data.skipped_groups.map(row => `${row.backup_group_key || ''}:${row.reason || row.match_status || ''}`).join('；'))}</div>`
+      : '';
+    wechatyBackupResult.innerHTML = rows + skipped;
+  }
+
+  async function importWechatyGroupBackup() {
+    if (!wechatyBackupPayload) return;
+    const selected = [...wechatyBackupSelectedImportGroups].filter(key => {
+      const group = wechatyBackupPreviewGroups.find(item => item.backup_group_key === key);
+      return group && canSelectPreviewGroup(group);
+    });
+    if (!selected.length) {
+      showWechatyBackupFeedback('请选择可导入的群', true);
+      return;
+    }
+    if (wechatyBackupImportBtn) wechatyBackupImportBtn.disabled = true;
+    try {
+      const res = await fetch(`${API}/social/wechat-groups/backup/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          backup: wechatyBackupPayload,
+          selected_group_keys: selected,
+          allow_unique_name_match: wechatyBackupAllowNameMatch?.checked === true,
+        }),
+      });
+      const data = await res.json();
+      renderWechatyBackupImportResult(data);
+      if (!data.ok) throw new Error(data.error || '导入未完成');
+      showWechatyBackupFeedback(`导入完成：${data.groups?.length || 0} 个群`);
+      await loadWechatyBackupGroups({ silent: true });
+      await loadWechatyRecords({ append: false });
+      await loadWechatyActiveStats({ silent: true });
+    } catch (err) {
+      showWechatyBackupFeedback(err?.message || '导入失败', true);
+    } finally {
+      updateWechatyBackupImportButton();
+    }
+  }
+
   async function refreshWechatyMemberNames() {
     if (wechatyRecordsRefreshNamesBtn) wechatyRecordsRefreshNamesBtn.disabled = true;
     try {
@@ -5261,6 +5540,7 @@ function initTTSSettings() {
         loadDbArchiveSettings({ silent: true }),
         loadDbMemoryIndexStatus({ silent: true }),
         loadDbImageLibrary({ silent: true, autoProcess: true }),
+        loadWechatyBackupGroups({ silent: true }),
       ]);
       if (data.ok) renderDatabaseOverview(data);
       else showFeedback(dbFeedback, data.error || "数据库统计加载失败", true);
@@ -7328,6 +7608,49 @@ function initTTSSettings() {
   wechatyRecordsExportJsonBtn?.addEventListener("click", () => exportWechatyRecords('json'));
   wechatyRecordsExportCsvBtn?.addEventListener("click", () => exportWechatyRecords('csv'));
   wechatyRecordsImportFile?.addEventListener("change", () => importWechatyRecords(wechatyRecordsImportFile.files?.[0]));
+  wechatyBackupRefreshBtn?.addEventListener("click", () => loadWechatyBackupGroups({ silent: false }));
+  wechatyBackupSearch?.addEventListener("input", renderWechatyBackupGroups);
+  wechatyBackupSelectAllBtn?.addEventListener("click", () => {
+    wechatyBackupSelectedGroups = new Set(wechatyBackupGroups.map(group => group.backup_group_key).filter(Boolean));
+    renderWechatyBackupGroups();
+  });
+  wechatyBackupClearBtn?.addEventListener("click", () => {
+    wechatyBackupSelectedGroups = new Set();
+    renderWechatyBackupGroups();
+  });
+  wechatyBackupGroupList?.addEventListener("change", event => {
+    const input = event.target?.closest?.("input[data-backup-group]");
+    if (!input) return;
+    const key = input.dataset.backupGroup || "";
+    if (!key) return;
+    if (input.checked) wechatyBackupSelectedGroups.add(key);
+    else wechatyBackupSelectedGroups.delete(key);
+    renderWechatyBackupGroups();
+  });
+  wechatyBackupExportBtn?.addEventListener("click", exportWechatyGroupBackup);
+  wechatyBackupImportFile?.addEventListener("change", () => previewWechatyGroupBackup(wechatyBackupImportFile.files?.[0]));
+  wechatyBackupAllowNameMatch?.addEventListener("change", () => {
+    if (wechatyBackupAllowNameMatch.checked) {
+      for (const group of wechatyBackupPreviewGroups) {
+        if (group.importable && group.match_status === "unique_name") wechatyBackupSelectedImportGroups.add(group.backup_group_key);
+      }
+    } else {
+      for (const group of wechatyBackupPreviewGroups) {
+        if (group.match_status === "unique_name") wechatyBackupSelectedImportGroups.delete(group.backup_group_key);
+      }
+    }
+    renderWechatyBackupPreview();
+  });
+  wechatyBackupPreview?.addEventListener("change", event => {
+    const input = event.target?.closest?.("input[data-import-group]");
+    if (!input) return;
+    const key = input.dataset.importGroup || "";
+    if (!key) return;
+    if (input.checked) wechatyBackupSelectedImportGroups.add(key);
+    else wechatyBackupSelectedImportGroups.delete(key);
+    updateWechatyBackupImportButton();
+  });
+  wechatyBackupImportBtn?.addEventListener("click", importWechatyGroupBackup);
 
   wechatySaveDigestBtn?.addEventListener("click", async () => {
     wechatySaveDigestBtn.disabled = true;

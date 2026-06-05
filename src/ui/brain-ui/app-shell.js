@@ -573,6 +573,43 @@ const createSettingsModal = () => `
                 <div class="wechaty-empty">正在加载群组…</div>
               </div>
             </div>
+            <div class="wechaty-backup-panel">
+              <div class="wechaty-records-head">
+                <div>
+                  <h5>群组备份与迁移</h5>
+                  <p>按群导出聊天、图片解析、群记忆和成员记忆；导入前会校验当前微信号是否仍拥有对应群。</p>
+                </div>
+                <div class="wechaty-records-actions">
+                  <button class="settings-save-btn ghost" id="wechaty-backup-refresh-btn" type="button">刷新群数据</button>
+                  <button class="settings-save-btn primary" id="wechaty-backup-export-btn" type="button">导出选中</button>
+                  <label class="settings-save-btn ghost" for="wechaty-backup-import-file">选择备份</label>
+                  <input id="wechaty-backup-import-file" type="file" accept="application/json,.json" hidden>
+                </div>
+              </div>
+              <div class="wechaty-backup-summary" id="wechaty-backup-summary">尚未加载可备份群组。</div>
+              <div class="wechaty-backup-layout">
+                <section class="wechaty-backup-column">
+                  <div class="wechaty-backup-toolbar">
+                    <input class="settings-input" id="wechaty-backup-search" type="search" placeholder="搜索群名">
+                    <button class="settings-save-btn ghost" id="wechaty-backup-select-all-btn" type="button">全选</button>
+                    <button class="settings-save-btn ghost" id="wechaty-backup-clear-btn" type="button">清空</button>
+                  </div>
+                  <div class="wechaty-backup-options">
+                    <label><input id="wechaty-backup-include-media" type="checkbox" checked>包含图片文件</label>
+                    <label><input id="wechaty-backup-include-deleted" type="checkbox" checked>包含已删除记忆</label>
+                  </div>
+                  <div class="wechaty-backup-group-list" id="wechaty-backup-group-list"></div>
+                </section>
+                <section class="wechaty-backup-column">
+                  <div class="wechaty-backup-import-head">
+                    <label><input id="wechaty-backup-allow-name-match" type="checkbox">允许唯一群名匹配</label>
+                    <button class="settings-save-btn primary" id="wechaty-backup-import-btn" type="button" disabled>导入选中</button>
+                  </div>
+                  <div class="wechaty-backup-preview" id="wechaty-backup-preview">选择备份 JSON 后显示匹配结果。</div>
+                  <div class="wechaty-backup-result" id="wechaty-backup-result"></div>
+                </section>
+              </div>
+            </div>
             <div class="db-index-panel">
               <div class="wechaty-subsection-head">
                 <div>
@@ -1995,6 +2032,19 @@ const createSettingsModal = () => `
             <div class="settings-section">
               <div class="settings-section-label">更新说明</div>
               <div class="release-notes-list">
+              <article class="release-note-card">
+                <div class="release-note-head">
+                  <span class="release-note-version">v0.4.96</span>
+                  <span class="release-note-date">2026-06-05</span>
+                </div>
+                <p class="release-note-summary">新增微信群组备份与迁移：按群安全迁移聊天流水、图片解析、群记忆和成员记忆。</p>
+                <ul class="release-note-points">
+                  <li>数据库页新增“群组备份与迁移”，支持搜索群组、勾选导出、完整媒体/仅元数据模式和导入预览。</li>
+                  <li>备份只包含微信群数据白名单，排除 LLM、Skill、知识库、密钥、token、embedding 和 Honcho 同步字段。</li>
+                  <li>导入前实时读取当前在线微信号的真实群列表；无群、同名重复、缓存列表或未登录都会跳过。</li>
+                  <li>导入默认合并去重并重建 FTS；唯一群名匹配需要手动确认，避免同名群误导入。</li>
+                </ul>
+              </article>
               <article class="release-note-card">
                 <div class="release-note-head">
                   <span class="release-note-version">v0.4.92</span>

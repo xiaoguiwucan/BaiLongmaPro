@@ -10,6 +10,10 @@ let schemaReady = false
 let pendingDescribeJob = null
 const mediaDescribeJobs = new Map()
 
+export function ensureWeChatImageVisionSchemaForBackup() {
+  ensureSchema()
+}
+
 function ensureSchema() {
   if (schemaReady) return
   const db = getDB()

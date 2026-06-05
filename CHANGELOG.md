@@ -4,6 +4,19 @@
 
 ## v0.4.96 - 2026-06-05
 
+### 新增
+- 新增微信群组专用备份/迁移模块，格式为 `bailongma.wechat_group_backup`，按群导出 `wechat_group_activity`、`wechat_group_messages`、`wechat_group_memory_items`、`wechat_group_member_names`、`wechat_member_identities`、`wechat_member_identity_aliases` 和 `wechat_group_media_items`。
+- 数据库设置页新增“群组备份与迁移”区域，可搜索/勾选群组，选择完整媒体或仅元数据导出，导入前先预览当前微信号的匹配结果。
+- 导入默认合并去重，不做覆盖恢复；导入后重建聊天记录 FTS、长消息 chunk、本地消息 FTS 和本地记忆 FTS。
+- 媒体文件完整模式会恢复到 `data/wechat-media/imported/<backup_id>/<sha256>.<ext>`；元数据模式仍会保留图片解析描述、标签、模型状态和错误信息。
+
+### 安全
+- 备份明确排除 LLM 渠道、Skill、多模态渠道、搜索 Key、TTS、Embedding、知识库、核心长期记忆、全局配置、token、Honcho 同步 ID 和 embedding 向量。
+- 导入 preview 与正式导入都会重新调用当前 Wechaty 的实时 `bot.Room.findAll()`，不信任缓存群列表，也不使用按群名去重后的 UI 列表。
+- 匹配规则为精确 room id / historical id 优先；唯一群名匹配需要用户勾选确认；当前账号不存在、同名群重复、微信未登录或群列表过期时直接跳过且不写库。
+- 备份 manifest 增加 counts/checksum 校验，导入前发现 payload 被改动或行数不一致会标记为“备份损坏”并跳过。
+- 导入日志只记录 group key、目标群和统计信息，不打印聊天正文；未匹配群不会恢复媒体文件，也不会写入任何消息。
+
 ### 修复
 - 修复微信群视频解析进度提示误触本机文件隐私拦截的问题；视频解析渠道测试改为真实 `chat/completions` + `video_url` 请求，避免 `/models` 可用但实际解析返回 NotFound 时被误判为可用。
 - 修复 GitHub Actions Release workflow 中 Windows 与 macOS 矩阵并发发布同一 tag 时抢建同一个 GitHub Release，导致 macOS 发布阶段出现 `already_exists field=tag_name` 422 错误的问题；发布矩阵现在串行执行，保留单平台手动补发能力。
@@ -13,6 +26,9 @@
 - `AGENTS.md` 新增发布纪律：每次完成代码、配置或项目规范修改后必须新增并推送新的 Git tag 触发 GitHub Actions，禁止复用或改写既有 tag；同时要求详细说明修改内容、原因、验证结果和部署注意事项。
 
 ### 验证
+- 通过 `node --check src/social/wechat-group-backup.js`、`node --check src/api.js`、`node --check src/ui/brain-ui/app.js`、`node --check src/ui/brain-ui/app-shell.js`。
+- 通过新增 `npm run test:wechat-group-backup`，覆盖白名单导出、排除敏感配置、未登录/缓存群/同名群拒绝、精确 ID 匹配、唯一群名确认导入、重复导入幂等、`source_message_id` 重映射、FTS 重建和媒体恢复。
+- 通过 `npm run smoke:brain-ui`，新增检查 `1280x840`、`390x844`、`320x720` 三种视口下“群组备份与迁移”面板无横向溢出、按钮不可读、卡片撑破或结果区遮挡。
 - 通过 `node --check src/social/wechat-video-analysis-skill.js`、`node --check src/social/wechaty-duty-group.js`、`node --check src/config.js` 和 `npm run test:wechat-video-analysis`。
 - 通过 PowerShell 检查 `.github/workflows/release.yml` 包含 `max-parallel: 1`。
 - 通过 `node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"`。
@@ -24,6 +40,9 @@
 
 ### 部署/备份注意事项
 - 已存在的远端 `v0.4.95` 及更早标签不改写；本次以 `v0.4.96` 新标签触发发布，避免覆盖既有发布历史。
+- 本版本会新增导入台账表 `wechat_group_backup_imports` 和 `wechat_group_backup_import_rows`，不删除旧数据。
+- 群组备份文件包含聊天内容和图片解析结果，本身是敏感文件；文件名不包含群名或账号名，迁移后请自行妥善保存或删除。
+- 完整媒体模式会写入 base64，备份可能较大；单个超过 20MB 的媒体文件会跳过文件本体但保留解析元数据。
 
 ## v0.4.94 - 2026-06-05
 

@@ -22,7 +22,7 @@ import { persistAppState } from './capabilities/executor.js'
 import { MinimaxProvider } from './providers/minimax.js'
 import { handleSocialWebhook, isSocialWebhookPath } from './social/webhooks.js'
 import { getClawbotQR, logoutClawbot } from './social/wechat-clawbot.js'
-import { configureWechatyDutyGroup, forceReloginWechatyDutyGroupConnector, getWechatyDutyGroupStatus, listWechatyDutyGroupRooms, refreshWechatyDutyGroupMemberNames, restartWechatyDutyGroupConnector, sendWechatyOfflineQrNotifyNow, startWechatyDutyGroupConnector, stopWechatyDutyGroupConnector, syncWechatyDutyGroupRooms, testWechatyNativeMention } from './social/wechaty-duty-group.js'
+import { configureWechatyDutyGroup, forceReloginWechatyDutyGroupConnector, getWechatyDutyGroupStatus, listWechatyDutyGroupRooms, listWechatyDutyGroupRoomsForBackup, refreshWechatyDutyGroupMemberNames, restartWechatyDutyGroupConnector, sendWechatyOfflineQrNotifyNow, startWechatyDutyGroupConnector, stopWechatyDutyGroupConnector, syncWechatyDutyGroupRooms, testWechatyNativeMention } from './social/wechaty-duty-group.js'
 import { buildWeChatGroupSummary, getRecentWeChatGroupMessages, listRecentWeChatGroups, makeWeChatGroupExternalId, WECHAT_GROUP_CHANNEL } from './social/wechat-groups.js'
 import { createWeChatGroupManualMemory, deleteWeChatGroupMemory, deleteWeChatMemberPermanentMemory, getLocalWeChatMemoryIndexStatus, getWeChatGroupMemoryStatus, listWeChatGroupMemory, listWeChatGroupMemoryOverview, listWeChatMemberPermanentMemory, syncLocalWeChatMessagesToHoncho, backfillLocalWeChatMemoryIndex, backfillWeChatExplicitMemoriesFromMessages, updateWeChatMemberPermanentMemory } from './social/wechat-group-memory.js'
 import { getWeChatCommandGuardRules } from './social/wechat-command-guard.js'
@@ -32,6 +32,7 @@ import { deleteWeChatImageMediaItem, getWeChatImageVisionStatus, listWeChatImage
 import { getWeChatVideoAnalysisStatus } from './social/wechat-video-analysis-skill.js'
 import { sendWeChatGroupDigestNow } from './social/wechat-group-digest.js'
 import { WECHAT_GROUP_REPORT_TEMPLATES, normalizeWeChatGroupReportTemplate, renderWeChatGroupStatsPosterHtml } from './social/wechat-group-report-template.js'
+import { WECHAT_GROUP_BACKUP_BODY_LIMIT_BYTES, buildWeChatGroupBackupExport, importWeChatGroupBackup, listWeChatGroupBackupGroups, previewWeChatGroupBackupImport } from './social/wechat-group-backup.js'
 import { getLLMConnectivityMonitorStatus, runLLMConnectivityMonitorCheck, startLLMConnectivityMonitorScheduler } from './llm-connectivity-monitor.js'
 import { getHotspotAlertStatus, runHotspotAlertCheck, startHotspotAlertScheduler, stopHotspotAlertScheduler } from './hotspot-alert-monitor.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
@@ -186,11 +187,24 @@ function jsonResponse(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
-function readJsonBody(req) {
+function readJsonBody(req, { limitBytes = 0 } = {}) {
   return new Promise((resolve, reject) => {
     const chunks = []
-    req.on('data', chunk => chunks.push(chunk))
+    let total = 0
+    let tooLarge = false
+    req.on('data', chunk => {
+      if (tooLarge) return
+      total += chunk.length
+      if (limitBytes && total > limitBytes) {
+        tooLarge = true
+        reject(new Error(`JSON body too large, limit ${Math.round(limitBytes / 1024 / 1024)}MB`))
+        try { req.destroy() } catch {}
+        return
+      }
+      chunks.push(chunk)
+    })
     req.on('end', () => {
+      if (tooLarge) return
       try {
         const raw = Buffer.concat(chunks).toString('utf-8')
         resolve(raw ? JSON.parse(raw) : {})
@@ -881,6 +895,69 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         jsonResponse(res, result.ok ? 200 : 400, result)
       }).catch(err => jsonResponse(res, 400, { ok: false, error: err.message }))
       return
+    }
+
+    // GET /social/wechat-groups/backup/groups — 列出可做微信群专用备份的本地群数据。
+    if (req.method === 'GET' && url.pathname === '/social/wechat-groups/backup/groups') {
+      if (!hasAllowedAccess(req, url)) return jsonResponse(res, 403, { ok: false, error: 'forbidden' })
+      const result = listWeChatGroupBackupGroups()
+      return jsonResponse(res, result.ok ? 200 : 400, result)
+    }
+
+    // POST /social/wechat-groups/backup/export — 导出选中群的白名单数据，不包含 LLM/Skill/Knowledge/密钥。
+    if (req.method === 'POST' && url.pathname === '/social/wechat-groups/backup/export') {
+      if (!requireLocalOrToken(req, res, url)) return
+      try {
+        const body = await readJsonBody(req)
+        const status = getWechatyDutyGroupStatus()
+        const result = buildWeChatGroupBackupExport({
+          groupIds: body.group_ids || body.groupIds || [],
+          includeMediaFiles: body.include_media_files !== false && body.includeMediaFiles !== false,
+          includeDeletedMemory: body.include_deleted_memory !== false && body.includeDeletedMemory !== false,
+          roomStatus: status,
+        })
+        if (!result.ok) return jsonResponse(res, 400, result)
+        res.writeHead(200, {
+          'Content-Type': result.contentType,
+          'Content-Disposition': `attachment; filename="${result.filename}"`,
+          'Cache-Control': 'no-store',
+        })
+        res.end(result.body)
+        return
+      } catch (err) {
+        return jsonResponse(res, 400, { ok: false, error: err.message })
+      }
+    }
+
+    // POST /social/wechat-groups/backup/import/preview — 校验备份并按当前微信号真实群列表做安全匹配。
+    if (req.method === 'POST' && url.pathname === '/social/wechat-groups/backup/import/preview') {
+      if (!requireLocalOrToken(req, res, url)) return
+      try {
+        const body = await readJsonBody(req, { limitBytes: WECHAT_GROUP_BACKUP_BODY_LIMIT_BYTES })
+        const roomStatus = await listWechatyDutyGroupRoomsForBackup()
+        const result = previewWeChatGroupBackupImport({ backup: body.backup || body, roomStatus })
+        return jsonResponse(res, result.ok ? 200 : 400, result)
+      } catch (err) {
+        return jsonResponse(res, 400, { ok: false, error: err.message })
+      }
+    }
+
+    // POST /social/wechat-groups/backup/import — 只导入当前微信账号能实时匹配到的选中群。
+    if (req.method === 'POST' && url.pathname === '/social/wechat-groups/backup/import') {
+      if (!requireLocalOrToken(req, res, url)) return
+      try {
+        const body = await readJsonBody(req, { limitBytes: WECHAT_GROUP_BACKUP_BODY_LIMIT_BYTES })
+        const roomStatus = await listWechatyDutyGroupRoomsForBackup()
+        const result = importWeChatGroupBackup({
+          backup: body.backup || body,
+          selectedGroupKeys: body.selected_group_keys || body.selectedGroupKeys || [],
+          allowUniqueNameMatch: body.allow_unique_name_match === true || body.allowUniqueNameMatch === true,
+          roomStatus,
+        })
+        return jsonResponse(res, result.ok ? 200 : 409, result)
+      } catch (err) {
+        return jsonResponse(res, 400, { ok: false, error: err.message })
+      }
     }
 
     // GET /social/wechat-groups/records/export?group_id=xxx&format=json|csv
