@@ -3,7 +3,7 @@ import { WechatyBuilder, ScanStatus } from 'wechaty'
 import { PuppetWechat4u } from 'wechaty-puppet-wechat4u'
 import { FileBox } from 'file-box'
 import { archiveWeChatGroupMessage, buildWeChatGroupCommandPrompt, formatGroupLine, getRecentWeChatGroupMessages, isGroupSummaryRequest, makeWeChatGroupExternalId, WECHAT_GROUP_CHANNEL } from './wechat-groups.js'
-import { getWechatyDutyGroupConfig, getWeChatGroupArchiveConfig, getWeChatGroupDigestConfig, resolveLLMProfileForGroup, setWechatyDutyGroupConfig, setWechatyDutyGroupRuntime } from '../config.js'
+import { getWechatMemeConfig, getWechatyDutyGroupConfig, getWeChatGroupArchiveConfig, getWeChatGroupDigestConfig, resolveLLMProfileForGroup, setWechatyDutyGroupConfig, setWechatyDutyGroupRuntime } from '../config.js'
 import { recordWeChatGroupMessage, recordWeChatGroupAssistantReply, recordWeChatGroupExplicitMemories } from './wechat-group-memory.js'
 import { buildWeChatGroupStatsDigest, getWeChatGroupStats, isWeChatInternalIdLike, listWeChatGroupMembers, normalizeWechatMessageType, normalizeWeChatGroupDisplayText, recordWeChatGroupActivity, upsertWeChatGroupMemberName } from './wechat-group-stats.js'
 import { renderWeChatGroupStatsPosterPng } from './wechat-group-report-renderer.js'
@@ -13,6 +13,7 @@ import { describeWeChatImageMedia, findWeChatImageMediaForQuote, findWeChatImage
 import { isWechatReplyGeneratedFilePath } from './wechat-file-reply.js'
 import { checkWeChatGroupCommandSafety } from './wechat-command-guard.js'
 import { searchPublicImages } from './public-image-search.js'
+import { extractPublicImageUrlsFromText, isLikelyPublicImageUrl, normalizePublicImageUrl, stripImageUrlsFromText } from './public-image-url.js'
 import { extractWeChatQuoteContext } from './wechat-quote-context.js'
 import { buildWechatExplicitMentionDecision, evaluateWechatAmbientReply, getWeChatAmbientReplyRules } from './wechat-ambient-reply.js'
 import { getClawbotStatus, sendClawbotSelfNotification } from './wechat-clawbot.js'
@@ -36,7 +37,6 @@ const OFFLINE_DETECT_INTERVAL_MS = 30 * 1000
 const STARTING_RELOGIN_REQUIRED_MS = 90 * 1000
 const OFFLINE_QR_RELOGIN_MIN_INTERVAL_MS = 60 * 1000
 const OFFLINE_QR_DIR = path.join(paths.dataDir, 'wechaty-login-qrcode')
-const PUBLIC_IMAGE_URL_RE = /^https?:\/\/[^\s<>"'`]+\.(?:png|jpe?g|gif|webp)(?:[?#][^\s<>"'`]*)?$/iu
 const LOCAL_FILE_REFERENCE_RE = /(?:file:\/\/|\/Users\/|~\/|[A-Za-z]:\\|(?:桌面|下载|文档|相册|截图|本机|本地).{0,20}(?:图片|文件|照片|截图))/iu
 const DIRECT_MEME_REQUEST_RE = /(?:斗图|表情包|梗图|gif|动图|发.{0,4}表情|来.{0,4}表情|整.{0,4}表情|发.{0,3}图|来.{0,3}图|开心|难过|愤怒|生气|鄙视|无语|笑死|吃瓜|破防).{0,8}(?:表情|表情包|梗图|图|gif)?|(?:表情|表情包|梗图|gif|动图)$/iu
 const DIRECT_PUBLIC_IMAGE_REQUEST_RE = /(?:找|搜|发|发送|来|给我|整).{0,12}(?:网络|网上|公开)?(?:图片|照片|壁纸|头像|配图|示意图|产品图|实拍图|图)(?!.*(?:表情包|表情|斗图|梗图|gif|动图))|(?:图片|照片|壁纸|头像|示意图).{0,8}(?:找|搜|发|来|给我)/iu
@@ -263,32 +263,13 @@ export async function sendWechatyOfflineQrNotifyNow({ reason = 'manual_test', fo
 }
 
 export function extractPublicImageUrlsFromWechatText(content = '') {
-  const text = String(content || '')
-  const urls = new Set()
-  for (const match of text.matchAll(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/giu)) {
-    if (PUBLIC_IMAGE_URL_RE.test(match[1])) urls.add(match[1])
-  }
-  for (const match of text.matchAll(/https?:\/\/[^\s<>"'`）)]+/giu)) {
-    const url = match[0].replace(/[。。，，、；;]+$/u, '')
-    if (PUBLIC_IMAGE_URL_RE.test(url)) urls.add(url)
-  }
-  return [...urls].slice(0, 3)
+  return extractPublicImageUrlsFromText(content, {
+    allowedDomains: getWechatMemeConfig().allowedDomains,
+  })
 }
 
 export function stripImageMarkdown(content = '', imageUrls = []) {
-  let text = String(content || '')
-  for (const url of imageUrls) {
-    const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    // 同时剥离 Markdown 图片、Markdown 链接和裸 URL；微信群里只发图片/GIF，不展示链接文本。
-    text = text.replace(new RegExp(`!\\[[^\\]]*\\]\\(${escaped}\\)`, 'g'), '')
-    text = text.replace(new RegExp(`\\[[^\\]]*\\]\\(${escaped}\\)`, 'g'), '')
-    text = text.replace(new RegExp(escaped, 'g'), '')
-  }
-  return text
-    .replace(/https?:\/\/[^\s<>"'`）)]+/giu, '')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  return stripImageUrlsFromText(content, imageUrls)
 }
 
 function getRecentWechatKey(groupId = '', senderId = '', senderName = '') {
@@ -1618,7 +1599,13 @@ export async function sendWechatyDutyGroupMessage(roomId, content, opts = {}) {
     if (adminBypass && LOCAL_FILE_REFERENCE_RE.test(body)) {
       console.log('[WechatyAdmin] 已验证管理员回复绕过微信群本机隐私发送拦截')
     }
-    const imageUrls = extractPublicImageUrlsFromWechatText(body)
+    const imageOptions = { allowedDomains: getWechatMemeConfig().allowedDomains }
+    const explicitImageUrls = Array.isArray(opts.imageUrls)
+      ? opts.imageUrls
+        .map(url => normalizePublicImageUrl(url, imageOptions))
+        .filter(url => url && isLikelyPublicImageUrl(url, imageOptions))
+      : []
+    const imageUrls = [...new Set([...explicitImageUrls, ...extractPublicImageUrlsFromWechatText(body)])].slice(0, 3)
     const localImageFiles = Array.isArray(opts.imageFilePaths)
       ? opts.imageFilePaths.map(v => String(v || '').trim()).filter(Boolean)
       : []
@@ -2628,7 +2615,7 @@ async function tryDirectPublicImageReply(room, text = '', { senderId = '', sende
     return true
   }
   console.log(`[WechatyImageSearch] 直接网络图片回复 topic="${groupName}" sender="${senderName}" query="${query}" provider="${result.provider}" url="${item.url}"`)
-  await sendWechatyDutyGroupMessage(room.id, item.url, { mentionId: senderId, mentionName: senderName })
+  await sendWechatyDutyGroupMessage(room.id, item.url, { mentionId: senderId, mentionName: senderName, imageUrls: [item.url] })
   recordWeChatGroupAssistantReply({ groupId, groupName, reply: `[网络图片] ${query} ${item.url}`, targetMemberName: senderName, source: 'wechaty-public-image-search' }).catch(() => {})
   return true
 }
@@ -2640,7 +2627,7 @@ async function tryDirectMemeReply(room, text = '', { senderId = '', senderName =
   const item = result?.items?.[0]
   if (!result?.ok || !item?.url) return false
   console.log(`[WechatyMeme] 直接表情包回复 topic="${groupName}" sender="${senderName}" query="${query}" url="${item.url}"`)
-  await sendWechatyDutyGroupMessage(room.id, item.url, { mentionId: senderId, mentionName: senderName })
+  await sendWechatyDutyGroupMessage(room.id, item.url, { mentionId: senderId, mentionName: senderName, imageUrls: [item.url] })
   return true
 }
 

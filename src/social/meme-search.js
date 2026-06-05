@@ -1,8 +1,8 @@
 import crypto from 'crypto'
 import { getWechatMemeConfig } from '../config.js'
+import { isLikelyPublicImageUrl, normalizePublicImageUrl } from './public-image-url.js'
 
 const SAFE_QUERY_BLOCK_RE = /(裸|色情|成人视频|黄色|三级片|露点|血腥|恐怖袭击|自杀|身份证|银行卡|密码|token|api\s*key)/iu
-const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp)(?:[?#].*)?$/iu
 
 function toolResult(payload) {
   return JSON.stringify(payload, null, 2)
@@ -17,29 +17,15 @@ function cleanQuery(value = '') {
     .slice(0, 40)
 }
 
-function normalizeImageUrl(url = '') {
-  const raw = String(url || '').trim()
-  if (!raw) return ''
-  try {
-    const u = new URL(raw)
-    if (u.protocol !== 'https:') return ''
-    return u.toString()
-  } catch {
-    return ''
-  }
-}
-
 function isAllowedMemeUrl(url = '', config = getWechatMemeConfig()) {
-  const normalized = normalizeImageUrl(url)
+  const normalized = normalizePublicImageUrl(url, { httpsOnly: true })
   if (!normalized) return false
   let host = ''
   try { host = new URL(normalized).hostname.toLowerCase() } catch { return false }
   const domains = Array.isArray(config.allowedDomains) ? config.allowedDomains : []
   if (domains.length && !domains.some(domain => host === domain || host.endsWith(`.${domain}`))) return false
   if (!config.allowGif && /\.gif(?:[?#].*)?$/iu.test(normalized)) return false
-  // 搜狗神配图 URL 常不带图片扩展，但 FileBox 可以从 content-type 识别；白名单域名允许。
-  if (!IMAGE_EXT_RE.test(normalized) && !/tugelepic\.mse\.sogou\.com$/iu.test(host)) return false
-  return true
+  return isLikelyPublicImageUrl(normalized, { allowedDomains: domains, httpsOnly: true })
 }
 
 function scoreMemeItem(item = {}, query = '') {
@@ -103,7 +89,7 @@ export async function searchMemes({ query = '', provider = 'xiaoapi', count = nu
     if (!res.ok || !json) return { ok: false, tool: 'meme_search', status: res.status, error: 'invalid meme api response', preview: text.slice(0, 300) }
     const rawItems = Array.isArray(json.data) ? json.data : []
     const itemsRaw = rawItems.map(row => {
-      const imageUrl = normalizeImageUrl(row.img_url || row.url || '')
+      const imageUrl = normalizePublicImageUrl(row.img_url || row.url || '', { httpsOnly: true })
       return {
         url: imageUrl,
         width: Number(row.img_width || row.width || 0),

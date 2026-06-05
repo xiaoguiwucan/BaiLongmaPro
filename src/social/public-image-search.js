@@ -1,34 +1,19 @@
 import { getWebSearchCredentials } from '../config.js'
+import { isLikelyPublicImageUrl, normalizePublicImageUrl } from './public-image-url.js'
 
 const IMAGE_TITLE_MAX = 160
-const IMAGE_URL_MAX = 600
 const IMAGE_SEARCH_TIMEOUT_MS = 12000
 const IMAGE_SAFE_QUERY_BLOCK_RE = /(?:裸照|色情|成人视频|未成年|身份证|银行卡|密码|token|api\s*key|私钥|本机|桌面|相册|截图|file:\/\/|\/Users\/)/iu
-const PUBLIC_IMAGE_URL_RE = /^https?:\/\/[^\s<>"'`]+(?:\.(?:png|jpe?g|gif|webp)(?:[?#][^\s<>"'`]*)?|[?#][^\s<>"'`]*(?:format|type|image|img)[^\s<>"'`]*)$/iu
 
 function normalizeText(value = '', max = IMAGE_TITLE_MAX) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max)
-}
-
-function normalizeImageUrl(value = '') {
-  const url = String(value || '').trim().replace(/&amp;/g, '&')
-  if (!/^https?:\/\//i.test(url)) return ''
-  if (url.length > IMAGE_URL_MAX) return ''
-  return url
-}
-
-function isLikelyPublicImageUrl(url = '') {
-  const value = normalizeImageUrl(url)
-  if (!value) return false
-  if (/^(?:https?:\/\/)?(?:localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[0-1])\.)/iu.test(value)) return false
-  return PUBLIC_IMAGE_URL_RE.test(value) || /\.(?:png|jpe?g|gif|webp)(?:[?#].*)?$/iu.test(value)
 }
 
 function dedupeImages(items = [], limit = 8) {
   const out = []
   const seen = new Set()
   for (const item of items) {
-    const url = normalizeImageUrl(item?.url)
+    const url = normalizePublicImageUrl(item?.url)
     if (!url || !isLikelyPublicImageUrl(url)) continue
     const key = url.replace(/[?#].*$/, '')
     if (seen.has(key)) continue
@@ -36,8 +21,8 @@ function dedupeImages(items = [], limit = 8) {
     out.push({
       title: normalizeText(item.title || item.source || '网络图片'),
       url,
-      thumbnail: normalizeImageUrl(item.thumbnail || ''),
-      pageUrl: normalizeImageUrl(item.pageUrl || ''),
+      thumbnail: normalizePublicImageUrl(item.thumbnail || ''),
+      pageUrl: normalizePublicImageUrl(item.pageUrl || ''),
       source: normalizeText(item.source || '', 80),
       provider: item.provider || 'unknown',
     })
