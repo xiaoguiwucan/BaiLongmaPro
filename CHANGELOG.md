@@ -8,7 +8,7 @@
 - 项目 Agent 规范更新：`AGENTS.md` 不再维护变更历史，所有代码、配置和项目规范变更历史统一写入 `CHANGELOG.md`；同时明确新增功能必须同步更新 `README.md`，Git 提交信息必须使用中文。
 - README 同步补充当前未发布能力、微信群助手最新能力、常用验证命令和开发约定，降低文档与当前代码能力脱节的风险。
 - GitHub Release 发布目标改为 `yideng966/BaiLongmaPro`，并新增 GitHub Actions tag 触发自动构建发布流程：推送 `v*` 标签后在 Windows/macOS runner 上分别执行发布命令并上传 Release 资产。
-- GitHub Actions macOS 发布流程改为安装依赖时跳过 postinstall，并在 `publish:mac` 阶段显式重建 `better-sqlite3` 后发布，避免 macOS runner 在依赖安装阶段提前失败。
+- GitHub Actions macOS 发布流程固定使用 Python 3.11，并让 `npm ci` 正常执行 `postinstall`，避免 macOS runner 默认 Python 缺少 `distutils` 导致 `node-gyp` 重建 `leveldown` 失败。
 - Release workflow 新增手动触发入口，可选择只构建 Windows、macOS 或全部平台，便于在某个平台失败后补发缺失资产。
 - 微信群助手新增“允许非 @ 主动回复”配置，默认关闭；开启后仅对已勾选回复群生效，并通过群级冷却间隔控制频率。@ 当前登录微信号的消息仍然必回且不受冷却限制。
 - 微信群助手新增“屏蔽成员”配置：按 Wechaty sender_id 精确屏蔽指定群成员，被屏蔽成员消息仍入库统计，但无论 @ 助手还是开启非 @ 主动回复都不会进入回复链路。

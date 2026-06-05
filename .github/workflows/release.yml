@@ -35,7 +35,7 @@ jobs:
           - name: macOS arm64
             platform: macos
             os: macos-latest
-            install: npm ci --ignore-scripts --no-fund --no-audit
+            install: npm ci --no-fund --no-audit
             command: npm run publish:mac
 
     steps:
@@ -63,12 +63,24 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Setup Python for node-gyp
+        if: >-
+          matrix.platform == 'macos' &&
+          (github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.platform == 'all' ||
+          github.event.inputs.platform == matrix.platform)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install dependencies
         if: >-
           github.event_name != 'workflow_dispatch' ||
           github.event.inputs.platform == 'all' ||
           github.event.inputs.platform == matrix.platform
         run: ${{ matrix.install }}
+        env:
+          npm_config_python: python3.11
 
       - name: Build and publish
         if: >-
@@ -79,3 +91,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_OPTIONS: --max-old-space-size=4096
+          npm_config_python: python3.11
