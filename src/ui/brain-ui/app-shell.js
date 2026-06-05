@@ -160,7 +160,7 @@ const createSettingsModal = () => `
         <button class="settings-nav-item" data-tab="wechat-groups" type="button">微信群助手</button>
         <button class="settings-nav-item" data-tab="database" type="button">数据库</button>
         <button class="settings-nav-item" data-tab="knowledge" type="button">知识库</button>
-        <button class="settings-nav-item" data-tab="skills" type="button">Skill 技能</button>
+        <button class="settings-nav-item" data-tab="skills" type="button">多模态能力</button>
         <button class="settings-nav-item" data-tab="voice" type="button">语音识别</button>
         <button class="settings-nav-item" data-tab="web-search" type="button">网络能力</button>
         <button class="settings-nav-item" data-tab="security" type="button">安全沙箱</button>
@@ -756,22 +756,27 @@ const createSettingsModal = () => `
           </div>
         </div>
 
-        <!-- ── Skill 技能 tab ── -->
+        <!-- ── 多模态能力 tab ── -->
         <div class="settings-tab" data-tab="skills">
-          <div class="settings-section">
-            <div class="settings-section-label">Skill 技能管理</div>
-            <p class="settings-hint">这里管理可被微信群 @ 触发的技能。第一个技能「生图」会在群友 @ 助手并明确要求生成图片时直接调用图片模型，不额外添加预制提示词。</p>
-            <div class="wechaty-meme-panel">
+          <div class="settings-section multimodal-settings">
+            <div class="settings-section-label">多模态能力</div>
+            <p class="settings-hint">集中配置图像生成、图片理解和视频理解。常用开关、模型、密钥和测试入口放在当前页；多渠道故障切换放在高级配置中。</p>
+            <div class="multimodal-summary">
+              <span id="skill-image-status">○ 图像生成未配置</span>
+              <span id="skill-vision-status">○ 图片理解未检测</span>
+              <span id="skill-video-status">○ 视频理解未配置</span>
+            </div>
+            <div class="multimodal-card-grid">
+            <div class="wechaty-meme-panel multimodal-card">
               <div class="wechaty-subsection-head">
                 <div>
-                  <div class="wechaty-subsection-title">生图 Skill</div>
-                  <p class="settings-hint">触发：微信群里 @ 助手并要求“生成图片 / 生图 / 画图”。默认低质量 1024×1024 以提高速度；用户明确要求高清、2K、4K、8K 时使用高质量参数。每人每小时最多 10 张。</p>
+                  <div class="wechaty-subsection-title">图像生成</div>
+                  <p class="settings-hint compact">处理群内明确的生成图片请求，可配置质量、超时和每人频率上限。</p>
                 </div>
-                <span class="settings-platform-status" id="skill-image-status">○ 未配置</span>
               </div>
               <label class="wechaty-master-toggle">
                 <input id="skill-image-enabled" type="checkbox" checked>
-                <span>启用生图 Skill</span>
+                <span>启用图像生成</span>
               </label>
               <label class="wechaty-master-toggle">
                 <input id="skill-image-failover" type="checkbox" checked>
@@ -819,27 +824,29 @@ const createSettingsModal = () => `
                 </label>
               </div>
               <div class="settings-row-action">
-                <button class="settings-save-btn primary" id="skill-image-save-btn" type="button">保存生图 Skill</button>
-                <button class="settings-save-btn" id="skill-image-add-channel-btn" type="button">新增生图渠道</button>
+                <button class="settings-save-btn primary" id="skill-image-save-btn" type="button">保存图像生成</button>
+                <button class="settings-save-btn" id="skill-image-test-btn" type="button">测试当前模型</button>
+                <button class="settings-save-btn" id="skill-image-add-channel-btn" type="button">新增渠道</button>
                 <span class="settings-feedback" id="skill-image-feedback"></span>
               </div>
+              <details class="multimodal-advanced">
+                <summary>高级渠道池</summary>
               <div class="wechaty-subsection-head" style="margin-top:14px;">
                 <div>
-                  <div class="wechaty-subsection-title">生图模型渠道池</div>
-                  <p class="settings-hint compact">第一张卡就是当前优先使用的 API 渠道；生成失败、超时或接口不可用时，会自动尝试下一个已启用渠道。</p>
+                  <div class="wechaty-subsection-title">图像生成渠道</div>
+                  <p class="settings-hint compact">当前渠道失败时按顺序尝试备用渠道；密钥只保存在本机配置。</p>
                 </div>
               </div>
               <div class="wechaty-member-list" id="skill-image-channel-list"></div>
-              <p class="settings-hint compact">密钥只保存在本机配置，不会在页面回显，也不会提交到 GitHub。微信群生成失败或 API 调用失败时会 @ 提问人反馈原因。</p>
+              </details>
             </div>
 
-            <div class="wechaty-meme-panel">
+            <div class="wechaty-meme-panel multimodal-card">
               <div class="wechaty-subsection-head">
                 <div>
-                  <div class="wechaty-subsection-title">识图 Skill</div>
-                  <p class="settings-hint">微信群收到图片后保存文件与 base64，并用多模态/GPT 模型生成中文描述和标签。以后即使当前聊天模型不是多模态，也会把图片描述作为知识库上下文注入。</p>
+                  <div class="wechaty-subsection-title">图片理解</div>
+                  <p class="settings-hint compact">为微信群图片生成中文描述和标签，供图片库检索、记忆和后续上下文使用。</p>
                 </div>
-                <span class="settings-platform-status" id="skill-vision-status">○ 未检测</span>
               </div>
               <label class="wechaty-master-toggle">
                 <input id="skill-vision-enabled" type="checkbox" checked>
@@ -873,32 +880,35 @@ const createSettingsModal = () => `
                 </label>
               </div>
               <div class="settings-row-action">
-                <button class="settings-save-btn primary" id="skill-vision-save-btn" type="button">保存识图 Skill</button>
-                <button class="settings-save-btn" id="skill-vision-add-channel-btn" type="button">新增识图渠道</button>
+                <button class="settings-save-btn primary" id="skill-vision-save-btn" type="button">保存图片理解</button>
+                <button class="settings-save-btn" id="skill-vision-test-btn" type="button">测试当前模型</button>
+                <button class="settings-save-btn" id="skill-vision-add-channel-btn" type="button">新增渠道</button>
                 <button class="settings-save-btn" id="skill-vision-refresh-btn" type="button">刷新状态</button>
                 <span class="settings-feedback" id="skill-vision-feedback"></span>
               </div>
+              <details class="multimodal-advanced">
+                <summary>高级渠道池</summary>
               <div class="wechaty-subsection-head" style="margin-top:14px;">
                 <div>
-                  <div class="wechaty-subsection-title">识图模型渠道池</div>
-                  <p class="settings-hint compact">第一张卡就是当前优先使用的识图 API 渠道；当前渠道超时、503 或返回空时，会自动尝试下一个已启用渠道。</p>
+                  <div class="wechaty-subsection-title">图片理解渠道</div>
+                  <p class="settings-hint compact">当前渠道超时、503 或返回空时，会自动尝试下一个已启用渠道。</p>
                 </div>
               </div>
               <div class="wechaty-member-list" id="skill-vision-channel-list"></div>
+              </details>
               <p class="settings-hint compact" id="skill-vision-counts">图片入库：—</p>
             </div>
 
-            <div class="wechaty-meme-panel">
+            <div class="wechaty-meme-panel multimodal-card">
               <div class="wechaty-subsection-head">
                 <div>
-                  <div class="wechaty-subsection-title">视频解析 Skill</div>
-                  <p class="settings-hint">微信群里 @ 助手并发送视频，或明确说“解析/总结这个视频”时，临时读取视频并调用多模态模型回答。视频不会进入图片库或媒体数据库，解析结束后删除临时文件。</p>
+                  <div class="wechaty-subsection-title">视频理解</div>
+                  <p class="settings-hint compact">临时读取群内视频并调用多模态模型回答，解析后删除临时文件。</p>
                 </div>
-                <span class="settings-platform-status" id="skill-video-status">○ 未配置</span>
               </div>
               <label class="wechaty-master-toggle">
                 <input id="skill-video-enabled" type="checkbox" checked>
-                <span>启用视频解析 Skill</span>
+                <span>启用视频理解</span>
               </label>
               <label class="wechaty-master-toggle">
                 <input id="skill-video-failover" type="checkbox" checked>
@@ -932,19 +942,24 @@ const createSettingsModal = () => `
                 </label>
               </div>
               <div class="settings-row-action">
-                <button class="settings-save-btn primary" id="skill-video-save-btn" type="button">保存视频解析 Skill</button>
-                <button class="settings-save-btn" id="skill-video-add-channel-btn" type="button">新增视频渠道</button>
+                <button class="settings-save-btn primary" id="skill-video-save-btn" type="button">保存视频理解</button>
+                <button class="settings-save-btn" id="skill-video-test-btn" type="button">测试当前模型</button>
+                <button class="settings-save-btn" id="skill-video-add-channel-btn" type="button">新增渠道</button>
                 <button class="settings-save-btn" id="skill-video-refresh-btn" type="button">刷新状态</button>
                 <span class="settings-feedback" id="skill-video-feedback"></span>
               </div>
+              <details class="multimodal-advanced">
+                <summary>高级渠道池</summary>
               <div class="wechaty-subsection-head" style="margin-top:14px;">
                 <div>
-                  <div class="wechaty-subsection-title">视频解析模型渠道池</div>
-                  <p class="settings-hint compact">第一张卡就是当前优先使用的视频理解 API 渠道；渠道返回不支持视频、超时或空内容时，会按设置尝试备用渠道。</p>
+                  <div class="wechaty-subsection-title">视频理解渠道</div>
+                  <p class="settings-hint compact">渠道返回不支持视频、超时或空内容时，会按设置尝试备用渠道。</p>
                 </div>
               </div>
               <div class="wechaty-member-list" id="skill-video-channel-list"></div>
+              </details>
               <p class="settings-hint compact" id="skill-video-counts">临时视频：解析完成即删除，不写入图片库/媒体库。</p>
+            </div>
             </div>
           </div>
         </div>

@@ -311,8 +311,8 @@ function isImageMime(mime = '') {
 export function isVisionCapableModel(model = '') {
   const value = String(model || '').toLowerCase()
   if (!value) return false
-  if (/gpt-image|dall-e|embedding|whisper|tts|deepseek|m2\.7|moonshot-v1|glm-4-flash/u.test(value)) return false
-  return /gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision|vl|qwen.*vl|gemini|claude-3|pixtral|llava/u.test(value)
+  if (/gpt-image|dall-e|embedding|whisper|tts|deepseek|m2\.7|moonshot-v1|glm-4-flash|seedream|agnes-image|agnes-video/u.test(value)) return false
+  return /gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision|vl|qwen.*vl|gemini|claude-3|pixtral|llava|agnes-(?:1\.5|2\.0)-flash/u.test(value)
 }
 
 function normalizeRuntimeBaseURL(value = '') {

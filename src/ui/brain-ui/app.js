@@ -2271,6 +2271,7 @@ function initTTSSettings() {
   const skillImageDefaultQuality = document.getElementById("skill-image-default-quality");
   const skillImageHighQuality = document.getElementById("skill-image-high-quality");
   const skillImageSaveBtn = document.getElementById("skill-image-save-btn");
+  const skillImageTestBtn = document.getElementById("skill-image-test-btn");
   const skillImageAddChannelBtn = document.getElementById("skill-image-add-channel-btn");
   const skillImageChannelList = document.getElementById("skill-image-channel-list");
   const skillImageFeedback = document.getElementById("skill-image-feedback");
@@ -2283,6 +2284,7 @@ function initTTSSettings() {
   const skillVisionKey = document.getElementById("skill-vision-key");
   const skillVisionTimeout = document.getElementById("skill-vision-timeout");
   const skillVisionSaveBtn = document.getElementById("skill-vision-save-btn");
+  const skillVisionTestBtn = document.getElementById("skill-vision-test-btn");
   const skillVisionAddChannelBtn = document.getElementById("skill-vision-add-channel-btn");
   const skillVisionChannelList = document.getElementById("skill-vision-channel-list");
   const skillVisionRefreshBtn = document.getElementById("skill-vision-refresh-btn");
@@ -2297,6 +2299,7 @@ function initTTSSettings() {
   const skillVideoTimeout = document.getElementById("skill-video-timeout");
   const skillVideoMaxMb = document.getElementById("skill-video-max-mb");
   const skillVideoSaveBtn = document.getElementById("skill-video-save-btn");
+  const skillVideoTestBtn = document.getElementById("skill-video-test-btn");
   const skillVideoAddChannelBtn = document.getElementById("skill-video-add-channel-btn");
   const skillVideoChannelList = document.getElementById("skill-video-channel-list");
   const skillVideoRefreshBtn = document.getElementById("skill-video-refresh-btn");
@@ -2440,6 +2443,8 @@ function initTTSSettings() {
     { value: "gpt-4o", label: "gpt-4o" },
     { value: "gpt-4.1-mini", label: "gpt-4.1-mini" },
     { value: "gpt-4.1", label: "gpt-4.1" },
+    { value: "agnes-2.0-flash", label: "agnes-2.0-flash" },
+    { value: "agnes-1.5-flash", label: "agnes-1.5-flash" },
     { value: "gpt-5.4", label: "gpt-5.4（当前可用）" },
   ];
   const BUILTIN_VIDEO_MODELS = [
@@ -2469,8 +2474,8 @@ function initTTSSettings() {
   function isProbablyVisionModel(model = "") {
     const value = String(model || "").toLowerCase();
     if (!value) return false;
-    if (/gpt-image|dall-e|embedding|whisper|tts|deepseek|moonshot-v1|glm-4-flash/.test(value)) return false;
-    return /gpt|vision|vl|qwen.*vl|gemini|claude|pixtral|llava/.test(value);
+    if (/gpt-image|dall-e|embedding|whisper|tts|deepseek|moonshot-v1|glm-4-flash|seedream|agnes-image|agnes-video/.test(value)) return false;
+    return /gpt|vision|vl|qwen.*vl|gemini|claude|pixtral|llava|agnes-(?:1\.5|2\.0)-flash/.test(value);
   }
 
   function buildVisionModelOptions(current = "") {
@@ -2500,11 +2505,22 @@ function initTTSSettings() {
     });
   });
 
-  function showFeedback(el, msg, isError = false) {
+  function showFeedback(el, msg, isError = false, options = {}) {
     if (!el) return;
+    if (el._feedbackTimer) {
+      clearTimeout(el._feedbackTimer);
+      el._feedbackTimer = null;
+    }
     el.textContent = msg;
     el.className = "settings-feedback" + (isError ? " error" : "");
-    setTimeout(() => { el.textContent = ""; el.className = "settings-feedback"; }, 3000);
+    const timeoutMs = Number(options.timeoutMs ?? 3000);
+    if (timeoutMs > 0) {
+      el._feedbackTimer = setTimeout(() => {
+        el.textContent = "";
+        el.className = "settings-feedback";
+        el._feedbackTimer = null;
+      }, timeoutMs);
+    }
   }
 
   function refreshConfigSummary({ llm, minimax }) {
@@ -3256,10 +3272,10 @@ function initTTSSettings() {
         renderLLMProfiles(data.llm.profiles || cachedLLMProfiles, data.llm);
       }
       renderLLMBatchResult(lastLLMBatchResults, { checkedAt: data.checkedAt });
-      showFeedback(llmFeedback, `批量测试完成：${lastLLMBatchResults.filter(item => item.ok).length}/${lastLLMBatchResults.length} 个连通`);
+      showFeedback(llmFeedback, `批量测试完成：${lastLLMBatchResults.filter(item => item.ok).length}/${lastLLMBatchResults.length} 个连通`, false, { timeoutMs: 0 });
     } catch (err) {
       renderLLMBatchResult([], { error: err?.message || "批量测试请求失败" });
-      showFeedback(llmFeedback, err?.message || "批量测试请求失败", true);
+      showFeedback(llmFeedback, err?.message || "批量测试请求失败", true, { timeoutMs: 0 });
     } finally {
       llmBatchTesting = false;
       if (llmBatchTestSelectedBtn) llmBatchTestSelectedBtn.textContent = selectedText;
@@ -5945,17 +5961,28 @@ function initTTSSettings() {
     const channel = state.channels[index];
     if (!channel) return;
     try {
-      showFeedback(state.feedback, "正在测试渠道连通...");
+      showFeedback(state.feedback, "正在测试当前模型...", false, { timeoutMs: 0 });
       const data = await fetch(`${API}/settings/skills/test-channel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ skill: kind === "video" ? "videoAnalysis" : kind === "vision" ? "imageVision" : "imageGeneration", channel }),
       }).then(r => r.json());
-      if (data.ok) showFeedback(state.feedback, `${channel.name || channel.model} 连通正常，${data.latencyMs || 0}ms`);
-      else showFeedback(state.feedback, `${channel.name || channel.model} 不通：${data.error || "未知错误"}`, true);
+      if (data.ok) showFeedback(state.feedback, `${channel.name || channel.model} 连通正常，${data.latencyMs || 0}ms`, false, { timeoutMs: 0 });
+      else showFeedback(state.feedback, `${channel.name || channel.model} 不通：${data.error || "未知错误"}`, true, { timeoutMs: 0 });
     } catch (err) {
-      showFeedback(state.feedback, err?.message || "测试失败", true);
+      showFeedback(state.feedback, err?.message || "测试失败", true, { timeoutMs: 0 });
     }
+  }
+
+  function testActiveSkillChannel(kind = "image") {
+    syncSkillChannelInputs(kind);
+    const state = getSkillChannelState(kind);
+    if (!state.channels.length) {
+      showFeedback(state.feedback, "请先新增并填写模型渠道", true, { timeoutMs: 0 });
+      return;
+    }
+    const activeIndex = state.channels.findIndex(ch => ch.id === state.activeId);
+    testSkillChannel(kind, activeIndex >= 0 ? activeIndex : 0);
   }
 
   async function loadSkillChannelModels(kind = "image", index = 0) {
@@ -5974,10 +6001,12 @@ function initTTSSettings() {
         showFeedback(state.feedback, `${channel.name || channel.baseUrl || "渠道"} 获取模型失败：${data.error || "未知错误"}`, true);
         return;
       }
-      const models = Array.isArray(data.models) ? data.models.filter(Boolean) : [];
+      const rawModels = Array.isArray(data.models) ? data.models.filter(Boolean) : [];
+      const models = kind === "vision" ? rawModels.filter(isProbablyVisionModel) : rawModels;
       channel.modelOptions = models;
       if (!channel.model && models[0]) channel.model = models[0];
-      showFeedback(state.feedback, `已获取 ${models.length} 个模型，${data.latencyMs || 0}ms`);
+      const suffix = kind === "vision" && rawModels.length !== models.length ? `，已过滤 ${rawModels.length - models.length} 个非图片理解模型` : "";
+      showFeedback(state.feedback, `已获取 ${models.length} 个模型，${data.latencyMs || 0}ms${suffix}`);
       renderSkillChannels(kind);
     } catch (err) {
       showFeedback(state.feedback, err?.message || "获取模型列表失败", true);
@@ -6153,7 +6182,7 @@ function initTTSSettings() {
       refreshSkillVisionStatus();
       refreshSkillVideoStatus();
     } catch {
-      showFeedback(skillImageFeedback, 'Skill 设置加载失败', true);
+      showFeedback(skillImageFeedback, '多模态能力配置加载失败', true);
     }
   }
 
@@ -6205,7 +6234,7 @@ function initTTSSettings() {
       }).then(r => r.json());
       if (data.ok) {
         applySkillImageConfig(data.imageGeneration || payload);
-        showFeedback(skillImageFeedback, '生图 Skill 已保存，立即生效');
+        showFeedback(skillImageFeedback, '图像生成已保存，立即生效');
       } else showFeedback(skillImageFeedback, data.error || '保存失败', true);
     } catch {
       showFeedback(skillImageFeedback, '保存请求失败', true);
@@ -6241,7 +6270,7 @@ function initTTSSettings() {
       }).then(r => r.json());
       if (data.ok) {
         applySkillVisionConfig(data.imageVision || payload, data.status || null);
-        showFeedback(skillVisionFeedback, '识图 Skill 已保存，立即生效');
+        showFeedback(skillVisionFeedback, '图片理解已保存，立即生效');
       } else showFeedback(skillVisionFeedback, data.error || '保存失败', true);
     } catch {
       showFeedback(skillVisionFeedback, '保存请求失败', true);
@@ -6276,7 +6305,7 @@ function initTTSSettings() {
       }).then(r => r.json());
       if (data.ok) {
         applySkillVideoConfig(data.videoAnalysis || payload, data.status || null);
-        showFeedback(skillVideoFeedback, '视频解析 Skill 已保存，立即生效');
+        showFeedback(skillVideoFeedback, '视频理解已保存，立即生效');
       } else showFeedback(skillVideoFeedback, data.error || '保存失败', true);
     } catch {
       showFeedback(skillVideoFeedback, '保存请求失败', true);
@@ -7026,6 +7055,7 @@ function initTTSSettings() {
   wechatyTestMemeBtn?.addEventListener("click", testWechatyMemeSearch);
   wechatySaveMemeBtn?.addEventListener("click", saveWechatyMemeConfig);
   skillImageSaveBtn?.addEventListener("click", saveSkillImageConfig);
+  skillImageTestBtn?.addEventListener("click", () => testActiveSkillChannel("image"));
   skillImageAddChannelBtn?.addEventListener("click", () => addSkillChannel("image"));
   skillImageChannelList?.addEventListener("input", () => syncSkillChannelInputs("image"));
   skillImageChannelList?.addEventListener("change", event => {
@@ -7034,6 +7064,7 @@ function initTTSSettings() {
   });
   skillImageChannelList?.addEventListener("click", event => handleSkillChannelListClick("image", event));
   skillVisionSaveBtn?.addEventListener("click", saveSkillVisionConfig);
+  skillVisionTestBtn?.addEventListener("click", () => testActiveSkillChannel("vision"));
   skillVisionAddChannelBtn?.addEventListener("click", () => addSkillChannel("vision"));
   skillVisionChannelList?.addEventListener("input", () => syncSkillChannelInputs("vision"));
   skillVisionChannelList?.addEventListener("change", event => {
@@ -7043,6 +7074,7 @@ function initTTSSettings() {
   skillVisionChannelList?.addEventListener("click", event => handleSkillChannelListClick("vision", event));
   skillVisionRefreshBtn?.addEventListener("click", refreshSkillVisionStatus);
   skillVideoSaveBtn?.addEventListener("click", saveSkillVideoConfig);
+  skillVideoTestBtn?.addEventListener("click", () => testActiveSkillChannel("video"));
   skillVideoAddChannelBtn?.addEventListener("click", () => addSkillChannel("video"));
   skillVideoChannelList?.addEventListener("input", () => syncSkillChannelInputs("video"));
   skillVideoChannelList?.addEventListener("change", event => {
@@ -8225,14 +8257,14 @@ function initTTSSettings() {
         }
         renderLLMMonitor(cachedLLMMonitor, data.status || {}, data.profiles || cachedLLMProfiles, { rooms: cachedLLMMonitorRooms });
         const notifyFailed = notify && data.notify && data.notify.ok === false;
-        showFeedback(llmMonitorFeedback, notifyFailed ? `检测完成，但通知未发送：${data.notify.reason || "没有可通知群"}` : (notify ? "检测完成，已按配置通知微信群" : "检测完成"), notifyFailed);
+        showFeedback(llmMonitorFeedback, notifyFailed ? `检测完成，但通知未发送：${data.notify.reason || "没有可通知群"}` : (notify ? "检测完成，已按配置通知微信群" : "检测完成"), notifyFailed, { timeoutMs: 0 });
         loadLLMMonitorSettings();
       } else {
-        showFeedback(llmMonitorFeedback, data.error || "检测失败", true);
+        showFeedback(llmMonitorFeedback, data.error || "检测失败", true, { timeoutMs: 0 });
         if (llmMonitorResult) llmMonitorResult.textContent = data.error || "检测失败";
       }
     } catch {
-      showFeedback(llmMonitorFeedback, "请求失败", true);
+      showFeedback(llmMonitorFeedback, "请求失败", true, { timeoutMs: 0 });
       if (llmMonitorResult) llmMonitorResult.textContent = "检测请求失败";
     } finally {
       if (btn) {
@@ -8318,17 +8350,17 @@ function initTTSSettings() {
       });
       const data = await res.json();
       if (data.ok) {
-        showFeedback(llmFeedback, action === "test" ? `连通成功（${Math.round((data.latencyMs || 0) / 1000)} 秒）` : (action === "select" ? "已切换当前模型" : "模型池已更新"));
+        showFeedback(llmFeedback, action === "test" ? `连通成功（${Math.round((data.latencyMs || 0) / 1000)} 秒）` : (action === "select" ? "已切换当前模型" : "模型池已更新"), false, action === "test" ? { timeoutMs: 0 } : {});
         loadSettings();
       } else {
-        showFeedback(llmFeedback, action === "test" ? `连通失败：${data.error || "未知错误"}` : (data.error || "操作失败"), true);
+        showFeedback(llmFeedback, action === "test" ? `连通失败：${data.error || "未知错误"}` : (data.error || "操作失败"), true, action === "test" ? { timeoutMs: 0 } : {});
         if (data.llm) {
           renderLLMFailover(data.llm.failover || cachedLLMFailover);
           renderLLMProfiles(data.llm.profiles || cachedLLMProfiles, data.llm);
         } else loadSettings();
       }
     } catch {
-      showFeedback(llmFeedback, "请求失败", true);
+      showFeedback(llmFeedback, "请求失败", true, action === "test" ? { timeoutMs: 0 } : {});
     } finally {
       btn.disabled = false;
       if (action === "test") btn.textContent = originalText || "测试连通";

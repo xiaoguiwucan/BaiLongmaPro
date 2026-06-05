@@ -7452,6 +7452,66 @@ body.person-card-mode .person-card-panel,
 .wechaty-meme-grid .settings-input[type="password"] {
   letter-spacing: 0.02em;
 }
+.multimodal-settings {
+  padding: 14px 16px 16px;
+}
+.multimodal-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+.multimodal-summary span {
+  height: auto;
+  margin: 0;
+  padding: 5px 9px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.035);
+  color: var(--dim);
+  font-size: 10px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.multimodal-summary .ok {
+  color: var(--cool);
+  border-color: rgba(114,255,195,0.24);
+  background: rgba(114,255,195,0.07);
+}
+.multimodal-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.multimodal-card {
+  margin: 0;
+  padding: 13px;
+}
+.multimodal-card .wechaty-meme-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.multimodal-card .settings-row-action {
+  gap: 8px;
+}
+.multimodal-card .settings-save-btn {
+  min-height: 32px;
+  padding-inline: 10px;
+}
+.multimodal-advanced {
+  margin-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  padding-top: 9px;
+}
+.multimodal-advanced summary {
+  cursor: pointer;
+  color: var(--ink2);
+  font-size: 11px;
+  font-weight: 700;
+}
+.multimodal-advanced[open] summary {
+  color: var(--cool);
+}
 .wechaty-meme-preview {
   min-height: 92px;
   border: 1px solid rgba(255,255,255,0.08);
@@ -7855,6 +7915,7 @@ body.person-card-mode .person-card-panel,
 }
 @media (max-width: 900px) {
   .wechaty-meme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .multimodal-card-grid { grid-template-columns: 1fr; }
   .settings-modal {
     width: calc(100vw - 12px);
     height: calc(100vh - 12px);
