@@ -1094,6 +1094,26 @@ export function findWeChatImageMediaForQuote({ groupId = '', groupName = '', quo
     quote.messageId,
     ...(Array.isArray(quote.messageIds) ? quote.messageIds : []),
   ].map(v => String(v || '').trim()).filter(Boolean))]
+  const rowMatchesMessageId = (row = {}) => {
+    if (!messageIds.length) return false
+    const sourceText = String(row.source_text || '')
+    const fileName = String(row.file_name || '')
+    const rowId = String(row.id || '')
+    return messageIds.some(id => id && (sourceText.includes(id) || fileName.includes(id) || rowId === id))
+  }
+  if (messageIds.length) {
+    const matched = rows
+      .filter(rowMatchesMessageId)
+      .map(row => ({ ...row, _score: 100, _match_type: 'message_id' }))
+      .slice(0, Math.min(Math.max(Number(limit || 5), 1), 20))
+    return {
+      ok: true,
+      strict: true,
+      messageIds,
+      reason: matched.length ? 'quote_message_id_matched' : 'quote_message_id_not_found',
+      items: matched,
+    }
+  }
   const sender = normalizeSearchText(quote.sender || '')
   const senderCompact = compactSearchText(quote.sender || '')
   const quoteMs = parseQuoteCreateTimeMs(quote.createTime)

@@ -383,6 +383,7 @@ function findWechatImageReplyCandidate({ groupId = '', groupName = '', senderId 
   if (quote?.ok && quote.kind === 'image') {
     const quoted = findWeChatImageMediaForQuote({ groupId, groupName, quote, query: text || rawText, limit: 5 })
     if (quoted.items?.[0]?.id) return { item: quoted.items[0], quoteMatched: true, source: 'quote' }
+    if (quoted.strict) return { item: null, quoteMatched: false, source: 'quote_missing' }
   }
   const recentMediaId = getLatestRecentWechatMediaId({ groupId, senderId, senderName })
   if (recentMediaId > 0 && (isBareWechatMentionText(text) || hasWechatImageUnderstandingIntent(text))) {
@@ -2687,6 +2688,10 @@ async function tryDirectImageTaggingReply(room, text = '', { senderId = '', send
   const quotedImage = quote?.ok && quote.kind === 'image'
     ? findWeChatImageMediaForQuote({ groupId, groupName, quote, query: value, limit: 5 })
     : { items: [] }
+  if (quotedImage.strict && !quotedImage.items?.length) {
+    await sendWechatyDutyGroupMessage(room.id, '我看到了你引用的是图片，但没有在当前群图片库里匹配到对应原图。你把原图直接再发一次，然后引用它说“打标签：xxx”。', { mentionId: senderId, mentionName: senderName })
+    return true
+  }
   const found = findWeChatImageMediaForRequest({ groupId, groupName, query: `${value} 刚才 最近`, limit: 8 })
   const recentMediaId = getLatestRecentWechatMediaId({ groupId, senderId, senderName })
   const item = (quotedImage.items || [])[0]
@@ -2721,6 +2726,10 @@ async function tryDirectImageUnderstandingReply(room, text = '', { senderId = ''
   const quotedImage = quote?.ok && quote.kind === 'image'
     ? findWeChatImageMediaForQuote({ groupId, groupName, quote, query: value, limit: 5 })
     : { items: [] }
+  if (quotedImage.strict && !quotedImage.items?.length) {
+    await sendWechatyDutyGroupMessage(room.id, '我看到了你引用的是图片，但没有在当前群图片库里匹配到对应原图。可能是这张图发送时我还没在线入库，或引用没有带可匹配的原始图片记录。你把原图直接再发一次，我收到后会自动入库识别。', { mentionId: senderId, mentionName: senderName })
+    return true
+  }
   const found = findWeChatImageMediaForRequest({ groupId, groupName, query: `${value} 刚才 最近`, limit: 8 })
   const recentMediaId = getLatestRecentWechatMediaId({ groupId, senderId, senderName })
   const item = (quotedImage.items || [])[0]
