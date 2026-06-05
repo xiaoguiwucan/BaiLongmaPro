@@ -2083,11 +2083,27 @@ function initTTSSettings() {
   const llmEditingIdInput = document.getElementById("settings-llm-editing-id");
   const llmCurrentProfile = document.getElementById("settings-llm-current-profile");
   const llmPoolList = document.getElementById("settings-llm-pool-list");
+  const llmSummaryCurrent = document.getElementById("settings-llm-summary-current");
+  const llmSummaryTotal = document.getElementById("settings-llm-summary-total");
+  const llmSummaryOk = document.getElementById("settings-llm-summary-ok");
+  const llmSummaryBad = document.getElementById("settings-llm-summary-bad");
+  const llmSummaryLast = document.getElementById("settings-llm-summary-last");
+  const llmBatchSelectAllBtn = document.getElementById("settings-llm-batch-all");
+  const llmBatchClearBtn = document.getElementById("settings-llm-batch-clear");
+  const llmBatchTestSelectedBtn = document.getElementById("settings-llm-test-selected");
+  const llmBatchTestAllBtn = document.getElementById("settings-llm-test-all");
+  const llmBatchCount = document.getElementById("settings-llm-batch-count");
+  const llmBatchResult = document.getElementById("settings-llm-batch-result");
   const llmFailoverEnabled = document.getElementById("settings-llm-failover-enabled");
   const llmFailoverCooldown = document.getElementById("settings-llm-failover-cooldown");
   const llmFailoverAttempts = document.getElementById("settings-llm-failover-attempts");
   const saveLlmFailoverBtn = document.getElementById("settings-save-llm-failover");
   const llmFailoverFeedback = document.getElementById("settings-llm-failover-feedback");
+  const llmRoutingGlobal = document.getElementById("settings-llm-routing-global");
+  const llmRoutingCount = document.getElementById("settings-llm-routing-count");
+  const llmRoutingList = document.getElementById("settings-llm-routing-list");
+  const saveLlmRoutingBtn = document.getElementById("settings-save-llm-routing");
+  const llmRoutingFeedback = document.getElementById("settings-llm-routing-feedback");
   const llmMonitorEnabled = document.getElementById("settings-llm-monitor-enabled");
   const llmMonitorInterval = document.getElementById("settings-llm-monitor-interval");
   const llmMonitorMode = document.getElementById("settings-llm-monitor-mode");
@@ -2375,10 +2391,15 @@ function initTTSSettings() {
   let cachedLLMProfiles = [];
   let cachedActiveLLM = null;
   let cachedLLMFailover = { enabled: true, cooldownSeconds: 180, maxAttempts: 4 };
+  let cachedLLMRouting = { globalProfileId: "", globalProfile: null, groupOverrides: [] };
+  let cachedLLMRoutingRooms = [];
   let cachedLLMMonitor = { enabled: false, intervalMinutes: 60, notifyMode: "changes", selectedProfileIds: [], selectedGroups: [], notifyMentionsByGroup: {} };
   let cachedLLMMonitorStatus = {};
   let cachedLLMMonitorRooms = [];
   let llmMonitorMentionCache = {};
+  let selectedLLMProfileIds = new Set();
+  let lastLLMBatchResults = [];
+  let llmBatchTesting = false;
   let wechatGroupArchiveConfigCache = {
     enabled: true,
     recordGroupNames: [],
@@ -2549,6 +2570,40 @@ function initTTSSettings() {
     return d.toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
   }
 
+  function getLLMProfileTestState(profile = {}) {
+    const lastSuccessMs = profile.lastSuccessAt ? Date.parse(profile.lastSuccessAt) : 0;
+    const lastFailedMs = profile.lastFailedAt ? Date.parse(profile.lastFailedAt) : 0;
+    if (lastFailedMs && lastFailedMs >= lastSuccessMs) {
+      return { state: "down", label: "失败", detail: profile.lastError || "最近检测/调用失败", at: profile.lastFailedAt };
+    }
+    if (lastSuccessMs) {
+      return { state: "up", label: "成功", detail: "最近检测/调用成功", at: profile.lastSuccessAt };
+    }
+    return { state: "unknown", label: "未知", detail: "尚未检测", at: "" };
+  }
+
+  function getLLMProfileCardState(profile = {}) {
+    const testState = getLLMProfileTestState(profile);
+    if (profile.enabled === false) {
+      return {
+        state: "off",
+        label: "已关闭",
+        detail: testState.state === "unknown" ? "不参与自动切换，尚未检测" : `不参与自动切换，最近检测${testState.label}`,
+        at: testState.at,
+      };
+    }
+    if (profile.status === "cooldown") {
+      return { state: "warn", label: "冷却中", detail: `冷却到 ${formatLLMTime(profile.cooldownUntil)}`, at: testState.at };
+    }
+    return testState;
+  }
+
+  function formatLLMProfileLabel(profile = {}, fallback = "—") {
+    if (!profile) return fallback;
+    const providerModel = `${profile.providerLabel || profile.provider || "LLM"} · ${profile.model || "—"}`;
+    return profile.name && profile.name !== providerModel ? `${profile.name} · ${providerModel}` : providerModel;
+  }
+
   function providerModels(provider) {
     return cachedProviders?.[provider]?.models || [];
   }
@@ -2561,13 +2616,8 @@ function initTTSSettings() {
   }
 
   function llmMonitorProfileState(profile = {}) {
-    const lastSuccessMs = profile.lastSuccessAt ? Date.parse(profile.lastSuccessAt) : 0;
-    const lastFailedMs = profile.lastFailedAt ? Date.parse(profile.lastFailedAt) : 0;
-    if (profile.enabled === false) return { state: "off", label: "已关闭" };
-    if (profile.status === "cooldown") return { state: "warn", label: "冷却中" };
-    if (lastFailedMs && lastFailedMs >= lastSuccessMs) return { state: "down", label: "不通" };
-    if (lastSuccessMs) return { state: "up", label: "连通" };
-    return { state: "unknown", label: "未知" };
+    const state = getLLMProfileCardState(profile);
+    return { state: state.state, label: state.state === "up" ? "连通" : (state.state === "down" ? "不通" : state.label) };
   }
 
   function formatLLMMonitorStatus(status = {}, cfg = cachedLLMMonitor) {
@@ -2595,6 +2645,172 @@ function initTTSSettings() {
     const topic = String(room.topic || "").trim();
     const keys = new Set(llmMonitorGroupKeys({ id: rid, topic }));
     return selected.some(item => keys.has(String(item || "").trim()) || keys.has(normalizeLLMMonitorGroupValue(item)));
+  }
+
+  function normalizeLLMRoutingConfig(routing = {}, profiles = cachedLLMProfiles) {
+    const globalProfileId = String(routing.globalProfileId || routing.global_profile_id || cachedActiveLLM?.activeProfileId || "").trim();
+    const globalProfile = routing.globalProfile
+      || profiles.find(profile => String(profile.id || "") === globalProfileId)
+      || profiles.find(profile => profile.current)
+      || null;
+    const groupOverrides = (Array.isArray(routing.groupOverrides) ? routing.groupOverrides : [])
+      .map(item => ({
+        groupId: String(item?.groupId || item?.group_id || "").trim(),
+        groupName: String(item?.groupName || item?.group_name || item?.topic || "").trim(),
+        profileId: String(item?.profileId || item?.profile_id || item?.llmProfileId || item?.llm_profile_id || "").trim(),
+        profile: item?.profile || null,
+        updatedAt: item?.updatedAt || item?.updated_at || "",
+      }))
+      .filter(item => (item.groupId || item.groupName) && item.profileId);
+    return { globalProfileId, globalProfile, groupOverrides };
+  }
+
+  function llmRoutingGroupKeys(room = {}) {
+    return llmMonitorGroupKeys({
+      id: room.id || room.groupId || room.group_id || room.groupKey || "",
+      topic: room.topic || room.groupName || room.group_name || room.name || "",
+    });
+  }
+
+  function llmRoutingOverrideFor(room = {}, routing = cachedLLMRouting) {
+    const keys = new Set(llmRoutingGroupKeys(room));
+    const normalized = new Set([...keys].map(key => normalizeLLMMonitorGroupValue(key)));
+    return (routing.groupOverrides || []).find(item => {
+      const rowKeys = llmRoutingGroupKeys({ id: item.groupId, topic: item.groupName });
+      return rowKeys.some(key => keys.has(key) || normalized.has(normalizeLLMMonitorGroupValue(key)));
+    }) || null;
+  }
+
+  function buildLLMRoutingCandidates(routing = cachedLLMRouting, wechatyStatus = {}) {
+    const rooms = Array.isArray(wechatyStatus.rooms) ? wechatyStatus.rooms : cachedLLMRoutingRooms;
+    const seen = new Set();
+    const candidates = [];
+    const addCandidate = (room = {}, extra = {}) => {
+      const id = String(room.id || room.groupId || room.group_id || "").trim();
+      const topic = String(room.topic || room.groupName || room.group_name || room.name || "").trim();
+      if (!id && !topic) return;
+      const keys = llmRoutingGroupKeys({ id, topic }).map(key => normalizeLLMMonitorGroupValue(key)).filter(Boolean);
+      if (keys.some(key => seen.has(key))) return;
+      keys.forEach(key => seen.add(key));
+      candidates.push({
+        id,
+        topic,
+        stale: room.stale === true || room.selected === false || extra.stale === true,
+        savedOnly: extra.savedOnly === true,
+      });
+    };
+    rooms.forEach(room => addCandidate(room));
+    (routing.groupOverrides || []).forEach(item => addCandidate({
+      id: item.groupId,
+      topic: item.groupName,
+    }, { stale: true, savedOnly: true }));
+    return candidates;
+  }
+
+  function llmRoutingProfileById(profileId = "", profiles = cachedLLMProfiles) {
+    const id = String(profileId || "").trim();
+    return profiles.find(profile => String(profile.id || "") === id) || null;
+  }
+
+  function renderLLMRoutingProfileOptions(profiles = cachedLLMProfiles, selectedId = "") {
+    const current = String(selectedId || "").trim();
+    const options = [`<option value="">继承全局模型</option>`];
+    options.push(...profiles.map(profile => {
+      const id = String(profile.id || "").trim();
+      const suffix = profile.enabled === false ? "（已关闭）" : "";
+      const label = `${formatLLMProfileLabel(profile)}${suffix}`;
+      return `<option value="${escapeHtml(id)}"${id === current ? " selected" : ""}>${escapeHtml(label)}</option>`;
+    }));
+    return options.join("");
+  }
+
+  function updateLLMGroupRoutingCounts() {
+    if (!llmRoutingList) return;
+    const rows = [...llmRoutingList.querySelectorAll(".llm-routing-row")];
+    let custom = 0;
+    rows.forEach(row => {
+      const select = row.querySelector(".llm-routing-select");
+      const profileId = String(select?.value || "").trim();
+      const profile = llmRoutingProfileById(profileId);
+      row.classList.toggle("custom", !!profileId);
+      row.classList.toggle("inherited", !profileId);
+      const state = row.querySelector(".llm-routing-state");
+      if (state) {
+        state.textContent = profileId
+          ? `单独使用：${formatLLMProfileLabel(profile || { id: profileId, provider: "LLM", model: profileId })}`
+          : "继承全局模型";
+      }
+      if (profileId) custom += 1;
+    });
+    if (llmRoutingCount) llmRoutingCount.textContent = rows.length ? `${custom}/${rows.length} 个群单独配置` : "0 个群";
+  }
+
+  function renderLLMGroupRouting(routing = cachedLLMRouting, profiles = cachedLLMProfiles, wechatyStatus = {}) {
+    if (!llmRoutingList) return;
+    const profileRows = Array.isArray(profiles) ? profiles : [];
+    cachedLLMRouting = normalizeLLMRoutingConfig(routing, profileRows);
+    if (Array.isArray(wechatyStatus.rooms)) cachedLLMRoutingRooms = wechatyStatus.rooms;
+    const globalProfile = cachedLLMRouting.globalProfile
+      || llmRoutingProfileById(cachedLLMRouting.globalProfileId, profileRows)
+      || profileRows.find(profile => profile.current)
+      || null;
+    const globalFallback = `${cachedActiveLLM?.provider || "—"} · ${cachedActiveLLM?.model || "—"}`;
+    if (llmRoutingGlobal) llmRoutingGlobal.textContent = `全局默认：${globalProfile ? formatLLMProfileLabel(globalProfile) : globalFallback}`;
+    if (!profileRows.length) {
+      llmRoutingList.innerHTML = `<div class="llm-profile-empty">还没有可用于群路由的已保存模型。</div>`;
+      if (llmRoutingCount) llmRoutingCount.textContent = "0 个模型";
+      return;
+    }
+    const candidates = buildLLMRoutingCandidates(cachedLLMRouting, wechatyStatus);
+    if (!candidates.length) {
+      llmRoutingList.innerHTML = `<div class="llm-profile-empty">当前没有可配置的微信群。登录/恢复微信群助手后会显示群列表；已保存的独立路由也会保留在这里。</div>`;
+      if (llmRoutingCount) llmRoutingCount.textContent = "0 个群";
+      return;
+    }
+    llmRoutingList.innerHTML = candidates.map(room => {
+      const groupId = String(room.id || "").trim();
+      const groupName = String(room.topic || "").trim();
+      const override = llmRoutingOverrideFor({ id: groupId, topic: groupName }, cachedLLMRouting);
+      const profileId = override?.profileId || "";
+      const subtitle = room.savedOnly ? "已保存但当前未在线" : (room.stale ? "缓存/未开启自由回复" : "当前可配置");
+      const shortId = groupId ? ` · ${groupId.slice(0, 22)}` : "";
+      const label = groupName || groupId || "微信群";
+      return `<div class="llm-routing-row${profileId ? " custom" : " inherited"}" data-group-id="${escapeHtml(groupId)}" data-group-name="${escapeHtml(groupName)}">
+        <div class="llm-routing-group" title="${escapeHtml(groupId)}">
+          <b>${escapeHtml(label)}</b>
+          <em>${escapeHtml(`${subtitle}${shortId}`)}</em>
+        </div>
+        <label class="llm-routing-picker">
+          <span>回复模型</span>
+          <select class="settings-select llm-routing-select">${renderLLMRoutingProfileOptions(profileRows, profileId)}</select>
+        </label>
+        <span class="llm-routing-state">${profileId ? "单独使用" : "继承全局模型"}</span>
+      </div>`;
+    }).join("");
+    updateLLMGroupRoutingCounts();
+  }
+
+  function collectLLMGroupRoutingPayload() {
+    const groupOverrides = [];
+    if (!llmRoutingList) return { groupOverrides };
+    llmRoutingList.querySelectorAll(".llm-routing-row").forEach(row => {
+      const profileId = String(row.querySelector(".llm-routing-select")?.value || "").trim();
+      if (!profileId) return;
+      const groupId = String(row.dataset.groupId || "").trim();
+      const groupName = String(row.dataset.groupName || "").trim();
+      if (!groupId && !groupName) return;
+      groupOverrides.push({ groupId, groupName, profileId });
+    });
+    return { groupOverrides };
+  }
+
+  async function loadLLMGroupRoutingSettings() {
+    try {
+      const data = await fetch(`${API}/settings/llm-group-routing`).then(r => r.json());
+      if (!data.ok) return;
+      if (Array.isArray(data.profiles)) cachedLLMProfiles = data.profiles;
+      renderLLMGroupRouting(data.routing || {}, data.profiles || cachedLLMProfiles, data.wechatyDutyGroupStatus || {});
+    } catch {}
   }
 
   function llmMonitorMentionIdsForGroup(cfg = cachedLLMMonitor, room = {}) {
@@ -2914,8 +3130,149 @@ function initTTSSettings() {
     } catch {}
   }
 
+  function syncLLMBatchSelection(profiles = cachedLLMProfiles) {
+    const valid = new Set((Array.isArray(profiles) ? profiles : []).map(profile => String(profile.id || "")).filter(Boolean));
+    selectedLLMProfileIds = new Set([...selectedLLMProfileIds].filter(id => valid.has(id)));
+  }
+
+  function updateLLMBatchSelectionCount() {
+    syncLLMBatchSelection();
+    const total = cachedLLMProfiles.length;
+    const selected = selectedLLMProfileIds.size;
+    if (llmBatchCount) llmBatchCount.textContent = total ? `已选 ${selected}/${total} 个` : "已选 0 个";
+    if (llmBatchSelectAllBtn) llmBatchSelectAllBtn.disabled = !total || llmBatchTesting || selected === total;
+    if (llmBatchClearBtn) llmBatchClearBtn.disabled = !selected || llmBatchTesting;
+    if (llmBatchTestSelectedBtn) llmBatchTestSelectedBtn.disabled = !selected || llmBatchTesting;
+    if (llmBatchTestAllBtn) llmBatchTestAllBtn.disabled = !total || llmBatchTesting;
+    if (llmPoolList) {
+      llmPoolList.querySelectorAll(".llm-profile-checkbox").forEach(input => {
+        input.checked = selectedLLMProfileIds.has(input.value);
+      });
+    }
+  }
+
+  function setLLMProfileTestButtons(ids = [], testing = false) {
+    if (!llmPoolList) return;
+    const idSet = new Set(ids.map(id => String(id || "")).filter(Boolean));
+    llmPoolList.querySelectorAll(".llm-profile-card").forEach(card => {
+      const btn = card.querySelector('button[data-action="test"]');
+      if (!btn || !idSet.has(card.dataset.id || "")) return;
+      btn.disabled = testing;
+      btn.textContent = testing ? "测试中…" : "测试连通";
+    });
+  }
+
+  function renderLLMSummary(profiles = cachedLLMProfiles, llm = {}) {
+    const active = profiles.find(p => p.current) || profiles.find(p => p.id === llm.activeProfileId);
+    const fallback = `${llm.provider || "—"} · ${llm.model || "—"}`;
+    const stats = profiles.reduce((acc, profile) => {
+      const state = getLLMProfileTestState(profile);
+      if (state.state === "up") acc.ok += 1;
+      else if (state.state === "down") acc.failed += 1;
+      else acc.unknown += 1;
+      const lastMs = state.at ? Date.parse(state.at) : 0;
+      if (Number.isFinite(lastMs) && lastMs > acc.lastMs) {
+        acc.lastMs = lastMs;
+        acc.lastAt = state.at;
+      }
+      return acc;
+    }, { ok: 0, failed: 0, unknown: 0, lastMs: 0, lastAt: "" });
+    if (llmSummaryCurrent) llmSummaryCurrent.textContent = active ? formatLLMProfileLabel(active) : fallback;
+    if (llmSummaryTotal) llmSummaryTotal.textContent = `${profiles.length} 个`;
+    if (llmSummaryOk) llmSummaryOk.textContent = `${stats.ok} 个`;
+    if (llmSummaryBad) llmSummaryBad.textContent = `${stats.failed} / ${stats.unknown}`;
+    if (llmSummaryLast) llmSummaryLast.textContent = formatLLMTime(stats.lastAt);
+  }
+
+  function renderLLMBatchResult(results = lastLLMBatchResults, { running = false, error = "", checkedAt = "" } = {}) {
+    if (!llmBatchResult) return;
+    if (running) {
+      llmBatchResult.className = "llm-batch-result running";
+      llmBatchResult.innerHTML = `<div class="llm-batch-result-head"><b>正在顺序测试模型连通性…</b><span>已选择的配置会逐个执行，避免并发写入状态。</span></div>`;
+      return;
+    }
+    if (error) {
+      llmBatchResult.className = "llm-batch-result error";
+      llmBatchResult.innerHTML = `<div class="llm-batch-result-head"><b>批量测试失败</b><span>${escapeHtml(error)}</span></div>`;
+      return;
+    }
+    if (!results.length) {
+      llmBatchResult.className = "llm-batch-result";
+      llmBatchResult.textContent = "批量测试结果会显示在这里。";
+      return;
+    }
+    const ok = results.filter(item => item.ok).length;
+    const failed = results.filter(item => item.ok === false).length;
+    const summary = `${ok} 个成功 / ${failed} 个失败 · ${formatLLMTime(checkedAt || new Date().toISOString())}`;
+    llmBatchResult.className = `llm-batch-result ${failed ? "warn" : "ok"}`;
+    llmBatchResult.innerHTML = `
+      <div class="llm-batch-result-head">
+        <b>批量测试完成</b>
+        <span>${escapeHtml(summary)}</span>
+      </div>
+      <div class="llm-batch-result-list">
+        ${results.map(item => {
+          const label = `${item.name || item.model || item.id || "未命名模型"} · ${item.providerLabel || item.provider || "LLM"} · ${item.model || "—"}`;
+          const latency = item.latencyMs ? `${Math.round(item.latencyMs)}ms` : "—";
+          const err = item.error ? `<p>${escapeHtml(item.error)}</p>` : "";
+          return `<div class="llm-batch-result-item ${item.ok ? "ok" : "bad"}">
+            <span>${item.ok ? "成功" : "失败"}</span>
+            <b>${escapeHtml(label)}</b>
+            <em>${escapeHtml(latency)}</em>
+            ${err}
+          </div>`;
+        }).join("")}
+      </div>`;
+  }
+
+  async function runLLMBatchTest({ all = false } = {}) {
+    const ids = [...selectedLLMProfileIds];
+    const targetIds = all
+      ? cachedLLMProfiles.map(profile => String(profile.id || "")).filter(Boolean)
+      : ids;
+    if (!all && !ids.length) {
+      renderLLMBatchResult([], { error: "请选择要测试的模型配置" });
+      return;
+    }
+    llmBatchTesting = true;
+    const selectedText = llmBatchTestSelectedBtn?.textContent || "测试选中";
+    const allText = llmBatchTestAllBtn?.textContent || "测试全部";
+    if (llmBatchTestSelectedBtn) llmBatchTestSelectedBtn.textContent = "测试中…";
+    if (llmBatchTestAllBtn) llmBatchTestAllBtn.textContent = "测试中…";
+    updateLLMBatchSelectionCount();
+    setLLMProfileTestButtons(targetIds, true);
+    renderLLMBatchResult([], { running: true });
+    try {
+      const res = await fetch(`${API}/settings/llm-profile/test-batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(all ? { all: true } : { ids, all: false }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "批量测试失败");
+      lastLLMBatchResults = Array.isArray(data.results) ? data.results : [];
+      if (data.llm) {
+        renderLLMFailover(data.llm.failover || cachedLLMFailover);
+        renderLLMProfiles(data.llm.profiles || cachedLLMProfiles, data.llm);
+      }
+      renderLLMBatchResult(lastLLMBatchResults, { checkedAt: data.checkedAt });
+      showFeedback(llmFeedback, `批量测试完成：${lastLLMBatchResults.filter(item => item.ok).length}/${lastLLMBatchResults.length} 个连通`);
+    } catch (err) {
+      renderLLMBatchResult([], { error: err?.message || "批量测试请求失败" });
+      showFeedback(llmFeedback, err?.message || "批量测试请求失败", true);
+    } finally {
+      llmBatchTesting = false;
+      if (llmBatchTestSelectedBtn) llmBatchTestSelectedBtn.textContent = selectedText;
+      if (llmBatchTestAllBtn) llmBatchTestAllBtn.textContent = allText;
+      setLLMProfileTestButtons(targetIds, false);
+      updateLLMBatchSelectionCount();
+    }
+  }
+
   function renderLLMProfiles(profiles = [], llm = {}) {
-    cachedLLMProfiles = Array.isArray(profiles) ? profiles : [];
+    cachedLLMProfiles = (Array.isArray(profiles) ? [...profiles] : [])
+      .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0));
+    syncLLMBatchSelection(cachedLLMProfiles);
     const active = cachedLLMProfiles.find(p => p.current) || cachedLLMProfiles.find(p => p.id === llm.activeProfileId);
     if (llmCurrentProfile) {
       const activeProviderModel = active ? `${active.providerLabel || active.provider} · ${active.model}` : "";
@@ -2923,13 +3280,14 @@ function initTTSSettings() {
         ? `当前使用：${active.name && active.name !== activeProviderModel ? active.name + " · " : ""}${activeProviderModel}`
         : `当前使用：${llm.provider || "—"} · ${llm.model || "—"}`;
     }
+    renderLLMSummary(cachedLLMProfiles, llm);
     if (!llmPoolList) return;
     if (!cachedLLMProfiles.length) {
       llmPoolList.innerHTML = `<div class="llm-profile-empty">还没有模型配置，先在上方添加一个。保存后会自动加入模型池。</div>`;
+      updateLLMBatchSelectionCount();
       return;
     }
     llmPoolList.innerHTML = cachedLLMProfiles
-      .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0))
       .map((profile, idx) => {
         const cls = [
           "llm-profile-card",
@@ -2944,19 +3302,11 @@ function initTTSSettings() {
           `<span class="llm-profile-badge">#${idx + 1}</span>`,
         ].filter(Boolean).join("");
         const last = profile.lastSuccessAt || profile.lastFailedAt;
-        const lastSuccessMs = profile.lastSuccessAt ? Date.parse(profile.lastSuccessAt) : 0;
-        const lastFailedMs = profile.lastFailedAt ? Date.parse(profile.lastFailedAt) : 0;
-        const connectivity = profile.enabled === false
-          ? { state: 'off', label: '已关闭', detail: '不参与切换' }
-          : profile.status === 'cooldown'
-            ? { state: 'warn', label: '冷却中', detail: `冷却到 ${formatLLMTime(profile.cooldownUntil)}` }
-            : (lastFailedMs && lastFailedMs >= lastSuccessMs)
-              ? { state: 'down', label: '不通', detail: profile.lastError || '最近检测/调用失败' }
-              : (lastSuccessMs
-                ? { state: 'up', label: '连通', detail: '最近调用成功' }
-                : { state: 'unknown', label: '未知', detail: '尚未检测' });
+        const connectivity = getLLMProfileCardState(profile);
         const providerModel = `${profile.providerLabel || profile.provider} · ${profile.model || "—"}`;
         const subtitle = profile.name && profile.name !== providerModel ? providerModel : `模型池优先级 #${idx + 1}`;
+        const checked = selectedLLMProfileIds.has(String(profile.id || "")) ? " checked" : "";
+        const baseURL = profile.baseURL || "默认端点";
         return `
           <div class="${cls}" data-id="${escapeHtml(profile.id)}">
             <div class="llm-profile-head">
@@ -2964,12 +3314,19 @@ function initTTSSettings() {
                 <b>${escapeHtml(profile.name || "未命名模型")}</b>
                 <span>${escapeHtml(subtitle)}</span>
               </div>
-              <div class="llm-profile-badges">${badges}</div>
+              <div class="llm-profile-head-tools">
+                <label class="llm-profile-select">
+                  <input class="llm-profile-checkbox" type="checkbox" value="${escapeHtml(profile.id || "")}"${checked}>
+                  <span>批量测试</span>
+                </label>
+                <div class="llm-profile-badges">${badges}</div>
+              </div>
             </div>
             <div class="llm-profile-meta">
               <div><small>KEY</small><span>${escapeHtml(profile.apiKeyHint || (profile.configured ? "已配置" : "未配置"))}</span></div>
               <div><small>连通状态</small><span class="llm-signal llm-signal-${connectivity.state}" title="${escapeHtml(connectivity.detail)}"><i></i><b>${escapeHtml(connectivity.label)}</b></span></div>
               <div><small>最近</small><span>${escapeHtml(formatLLMTime(last))}</span></div>
+              <div><small>Base URL</small><span>${escapeHtml(baseURL)}</span></div>
             </div>
             ${profile.lastError ? `<p class="llm-profile-error">上次错误：${escapeHtml(profile.lastError)}</p>` : ""}
             <div class="llm-profile-actions">
@@ -2984,7 +3341,9 @@ function initTTSSettings() {
           </div>`;
       })
       .join("");
+    updateLLMBatchSelectionCount();
     renderLLMMonitorProfiles(cachedLLMProfiles, cachedLLMMonitor);
+    renderLLMGroupRouting(cachedLLMRouting, cachedLLMProfiles, { rooms: cachedLLMRoutingRooms });
   }
 
   function resetLLMProfileEditor() {
@@ -3011,6 +3370,7 @@ function initTTSSettings() {
       populateModelSelect(providerModels(profile.provider), profile.model);
     }
     if (llmKeyInput) llmKeyInput.value = "";
+    document.getElementById("settings-llm-editor-section")?.scrollIntoView({ block: "start", behavior: "smooth" });
     showFeedback(llmFeedback, "已载入编辑，API Key 留空表示不更换");
   }
 
@@ -3046,8 +3406,12 @@ function initTTSSettings() {
       if (llm.provider !== "custom") populateModelSelect(llm.models, llm.model);
       renderLLMFailover(llm.failover || {});
       renderLLMProfiles(llm.profiles || [], llm);
+      renderLLMGroupRouting(llm.routing || cachedLLMRouting, llm.profiles || cachedLLMProfiles, {});
       renderLLMMonitor(llm.connectivityMonitor || cachedLLMMonitor, llm.connectivityMonitorStatus || cachedLLMMonitorStatus, llm.profiles || cachedLLMProfiles, {});
-      setTimeout(() => loadLLMMonitorSettings(), 0);
+      setTimeout(() => {
+        loadLLMGroupRoutingSettings();
+        loadLLMMonitorSettings();
+      }, 0);
       if (typeof llm.temperature === "number" && tempSlider) {
         tempSlider.value = String(llm.temperature);
         if (tempVal) tempVal.textContent = llm.temperature.toFixed(2);
@@ -3060,6 +3424,8 @@ function initTTSSettings() {
     const data = event.detail || {};
     renderLLMFailover(data.failover || cachedLLMFailover);
     renderLLMProfiles(Array.isArray(data.profiles) ? data.profiles : cachedLLMProfiles, { activeProfileId: data.activeProfileId });
+    if (data.routing) renderLLMGroupRouting(data.routing, cachedLLMProfiles, { rooms: cachedLLMRoutingRooms });
+    else loadLLMGroupRoutingSettings();
   });
 
   window.addEventListener("bailongma:llm-connectivity-checked", () => {
@@ -7749,6 +8115,35 @@ function initTTSSettings() {
     finally { saveLlmFailoverBtn.disabled = false; }
   });
 
+  llmRoutingList?.addEventListener("change", (event) => {
+    if (event.target?.closest?.(".llm-routing-select")) updateLLMGroupRoutingCounts();
+  });
+
+  saveLlmRoutingBtn?.addEventListener("click", async () => {
+    saveLlmRoutingBtn.disabled = true;
+    try {
+      const payload = collectLLMGroupRoutingPayload();
+      const res = await fetch(`${API}/settings/llm-group-routing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showFeedback(llmRoutingFeedback, "群模型路由已保存");
+        if (data.llm) cachedActiveLLM = data.llm;
+        if (Array.isArray(data.llm?.profiles)) cachedLLMProfiles = data.llm.profiles;
+        renderLLMGroupRouting(data.routing || payload, data.llm?.profiles || cachedLLMProfiles, data.wechatyDutyGroupStatus || { rooms: cachedLLMRoutingRooms });
+      } else {
+        showFeedback(llmRoutingFeedback, data.error || "保存失败", true);
+      }
+    } catch {
+      showFeedback(llmRoutingFeedback, "请求失败", true);
+    } finally {
+      saveLlmRoutingBtn.disabled = false;
+    }
+  });
+
   llmMonitorProfileList?.addEventListener("change", updateLLMMonitorCounts);
   llmMonitorGroupList?.addEventListener("change", (event) => {
     const mentionCb = event.target?.closest?.(".llm-monitor-mention-checkbox");
@@ -7850,6 +8245,29 @@ function initTTSSettings() {
   testLlmMonitorBtn?.addEventListener("click", () => runLLMMonitorNow({ notify: false }));
   notifyLlmMonitorBtn?.addEventListener("click", () => runLLMMonitorNow({ notify: true }));
 
+  llmBatchSelectAllBtn?.addEventListener("click", () => {
+    selectedLLMProfileIds = new Set(cachedLLMProfiles.map(profile => String(profile.id || "")).filter(Boolean));
+    updateLLMBatchSelectionCount();
+  });
+
+  llmBatchClearBtn?.addEventListener("click", () => {
+    selectedLLMProfileIds = new Set();
+    updateLLMBatchSelectionCount();
+  });
+
+  llmBatchTestSelectedBtn?.addEventListener("click", () => runLLMBatchTest({ all: false }));
+  llmBatchTestAllBtn?.addEventListener("click", () => runLLMBatchTest({ all: true }));
+
+  llmPoolList?.addEventListener("change", (event) => {
+    const input = event.target?.closest?.(".llm-profile-checkbox");
+    if (!input) return;
+    const id = String(input.value || "").trim();
+    if (!id) return;
+    if (input.checked) selectedLLMProfileIds.add(id);
+    else selectedLLMProfileIds.delete(id);
+    updateLLMBatchSelectionCount();
+  });
+
   llmPoolList?.addEventListener("click", async (event) => {
     const btn = event.target.closest("button[data-action]");
     const card = event.target.closest(".llm-profile-card");
@@ -7862,6 +8280,7 @@ function initTTSSettings() {
       loadProfileIntoEditor(profile);
       return;
     }
+    const originalText = btn.textContent;
     btn.disabled = true;
     try {
       let endpoint = `${API}/settings/llm-profile`;
@@ -7912,6 +8331,7 @@ function initTTSSettings() {
       showFeedback(llmFeedback, "请求失败", true);
     } finally {
       btn.disabled = false;
+      if (action === "test") btn.textContent = originalText || "测试连通";
     }
   });
 

@@ -12,7 +12,7 @@ import { getQuotaStatus } from './quota.js'
 import { isRunning, stopLoop, startLoop } from './control.js'
 import { buildHeartbeatSystemPromptPreview } from './system-prompt-preview.js'
 import { paths } from './paths.js'
-import { config, activate as activateLLM, getActivationStatus, switchModel, setTemperature, getMinimaxKey, setMinimaxKey, getSocialConfig, setSocialConfig, getHonchoConfig, setHonchoConfig, getWechatyDutyGroupConfig, setWechatyDutyGroupConfig, getWeChatGroupArchiveConfig, setWeChatGroupArchiveConfig, getWeChatGroupDigestConfig, setWeChatGroupDigestConfig, WECHATY_PERSONA_PRESETS, getVoiceConfig, setVoiceConfig, getTTSConfig, setTTSConfig, getTTSCredentials, getProviderSummaries, getSecurity, setSecurity, getEmbeddingConfig, setEmbeddingConfig, EMBEDDING_PROVIDER_PRESETS, getWebSearchConfig, setWebSearchConfig, upsertLLMProfile, deleteLLMProfile, selectLLMProfile, testLLMProfileConnection, setLLMFailoverConfig, getLLMConnectivityMonitorConfig, setLLMConnectivityMonitorConfig, getWechatMemeConfig, setWechatMemeConfig, getSkillsConfig, setSkillImageConfig, setSkillImageVisionConfig, setSkillVideoAnalysisConfig, testSkillModelChannel, listSkillModelChannelModels } from './config.js'
+import { config, activate as activateLLM, getActivationStatus, switchModel, setTemperature, getMinimaxKey, setMinimaxKey, getSocialConfig, setSocialConfig, getHonchoConfig, setHonchoConfig, getWechatyDutyGroupConfig, setWechatyDutyGroupConfig, getWeChatGroupArchiveConfig, setWeChatGroupArchiveConfig, getWeChatGroupDigestConfig, setWeChatGroupDigestConfig, WECHATY_PERSONA_PRESETS, getVoiceConfig, setVoiceConfig, getTTSConfig, setTTSConfig, getTTSCredentials, getProviderSummaries, getSecurity, setSecurity, getEmbeddingConfig, setEmbeddingConfig, EMBEDDING_PROVIDER_PRESETS, getWebSearchConfig, setWebSearchConfig, upsertLLMProfile, deleteLLMProfile, selectLLMProfile, testLLMProfileConnection, setLLMFailoverConfig, getLLMConnectivityMonitorConfig, setLLMConnectivityMonitorConfig, getLLMGroupRoutingConfig, setLLMGroupRoutingConfig, getWechatMemeConfig, setWechatMemeConfig, getSkillsConfig, setSkillImageConfig, setSkillImageVisionConfig, setSkillVideoAnalysisConfig, testSkillModelChannel, listSkillModelChannelModels } from './config.js'
 import { getHotspotAlertConfig, setHotspotAlertConfig } from './config.js'
 import { streamTTS, TTS_PROVIDERS, TTS_VOICES } from './voice/tts-providers.js'
 import { getVoiceStatus, startVoiceServer, stopVoiceServer, restartVoiceServer } from './voice/manager.js'
@@ -56,6 +56,11 @@ const D3_VENDOR_PATH     = path.join(paths.resourcesDir, 'node_modules', 'd3', '
 const SANDBOX_PATH       = paths.sandboxDir
 const DEFAULT_AGENT_NAME = '小白龙'
 const DEFAULT_API_HOST = '0.0.0.0'
+
+function isSavedLLMProfileForBatchTest(profile = {}) {
+  const id = String(profile?.id || '').trim()
+  return !!id && !id.startsWith('llm_env_') && !id.startsWith('llm_runtime_')
+}
 
 // card.action signals that are lifecycle/system-internal — stored in DB for passive injector use only, not pushed to the agent queue
 const SILENT_CARD_ACTIONS = new Set([
@@ -1498,6 +1503,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           activeProfileId: status.activeProfileId,
           profiles: status.profiles,
           failover: status.failover,
+          routing: status.routing,
           connectivityMonitor: getLLMConnectivityMonitorConfig(),
           connectivityMonitorStatus: getLLMConnectivityMonitorStatus(),
         },
@@ -1539,7 +1545,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const body = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
           const result = await upsertLLMProfile(body)
           const status = getActivationStatus()
-          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover })
+          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover, routing: status.routing })
           jsonResponse(res, 200, { ok: true, ...result, llm: status })
         } catch (err) {
           jsonResponse(res, 400, { ok: false, error: err.message })
@@ -1558,7 +1564,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const profile = selectLLMProfile(id, { persist: true, reason: 'manual' })
           const status = getActivationStatus()
           emitEvent('model_switched', { provider: status.provider, model: status.model, profile })
-          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover })
+          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover, routing: status.routing })
           jsonResponse(res, 200, { ok: true, profile, llm: status })
         } catch (err) {
           jsonResponse(res, 400, { ok: false, error: err.message })
@@ -1576,13 +1582,59 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const { id } = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
           const result = await testLLMProfileConnection(id)
           const status = getActivationStatus()
-          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover })
+          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover, routing: status.routing })
           jsonResponse(res, 200, { ...result, llm: status })
         } catch (err) {
           jsonResponse(res, 400, { ok: false, error: err.message })
         }
       })
       return
+    }
+
+    // POST /settings/llm-profile/test-batch — sequentially test saved LLM profiles
+    if (req.method === 'POST' && url.pathname === '/settings/llm-profile/test-batch') {
+      if (!requireLocalOrToken(req, res, url)) return
+      try {
+        const body = await readJsonBody(req).catch(() => ({}))
+        const savedProfiles = (getActivationStatus().profiles || []).filter(isSavedLLMProfileForBatchTest)
+        const profileById = new Map(savedProfiles.map(profile => [String(profile.id || ''), profile]))
+        const all = body?.all === true
+        const ids = all
+          ? savedProfiles.map(profile => String(profile.id || '')).filter(Boolean)
+          : [...new Set((Array.isArray(body?.ids) ? body.ids : []).map(id => String(id || '').trim()).filter(Boolean))]
+
+        if (!ids.length) {
+          return jsonResponse(res, 400, { ok: false, error: all ? '还没有已保存的模型配置可测试' : '请选择要测试的模型配置' })
+        }
+
+        const missingIds = ids.filter(id => !profileById.has(id))
+        if (missingIds.length) {
+          return jsonResponse(res, 400, { ok: false, error: `未找到这些模型配置：${missingIds.join('、')}` })
+        }
+
+        const checkedAt = new Date().toISOString()
+        const results = []
+        for (const id of ids) {
+          const original = profileById.get(id) || {}
+          const result = await testLLMProfileConnection(id)
+          const profile = result.profile || original
+          results.push({
+            id,
+            name: profile.name || original.name || '',
+            provider: profile.provider || original.provider || '',
+            providerLabel: profile.providerLabel || original.providerLabel || '',
+            model: profile.model || original.model || '',
+            ok: result.ok === true,
+            latencyMs: result.latencyMs || 0,
+            error: result.error || '',
+          })
+        }
+        const status = getActivationStatus()
+        emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover, routing: status.routing })
+        return jsonResponse(res, 200, { ok: true, checkedAt, results, llm: status })
+      } catch (err) {
+        return jsonResponse(res, 400, { ok: false, error: err.message })
+      }
     }
 
     // POST /settings/llm-profile/delete — remove one saved model from the pool
@@ -1594,7 +1646,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const { id } = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
           const result = deleteLLMProfile(id)
           const status = getActivationStatus()
-          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover })
+          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover, routing: status.routing })
           jsonResponse(res, 200, { ok: true, ...result, llm: status })
         } catch (err) {
           jsonResponse(res, 400, { ok: false, error: err.message })
@@ -1612,13 +1664,39 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           const body = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
           const failover = setLLMFailoverConfig(body)
           const status = getActivationStatus()
-          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover })
+          emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover, routing: status.routing })
           jsonResponse(res, 200, { ok: true, failover, llm: status })
         } catch (err) {
           jsonResponse(res, 400, { ok: false, error: err.message })
         }
       })
       return
+    }
+
+    // GET /settings/llm-group-routing — read global/default and per-WeChat-group LLM routing
+    if (req.method === 'GET' && url.pathname === '/settings/llm-group-routing') {
+      if (!hasAllowedAccess(req, url)) return jsonResponse(res, 403, { ok: false, error: 'forbidden' })
+      const status = getActivationStatus()
+      return jsonResponse(res, 200, {
+        ok: true,
+        routing: getLLMGroupRoutingConfig(),
+        profiles: status.profiles,
+        wechatyDutyGroupStatus: getWechatyDutyGroupStatus(),
+      })
+    }
+
+    // POST /settings/llm-group-routing — save per-WeChat-group LLM profile overrides
+    if (req.method === 'POST' && url.pathname === '/settings/llm-group-routing') {
+      if (!requireLocalOrToken(req, res, url)) return
+      try {
+        const body = await readJsonBody(req).catch(() => ({}))
+        const routing = setLLMGroupRoutingConfig(body || {})
+        const status = getActivationStatus()
+        emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover, routing })
+        return jsonResponse(res, 200, { ok: true, routing, llm: status, wechatyDutyGroupStatus: getWechatyDutyGroupStatus() })
+      } catch (err) {
+        return jsonResponse(res, 400, { ok: false, error: err.message })
+      }
     }
 
     // GET /settings/llm-connectivity-monitor — read LLM channel connectivity notification config/status
@@ -1655,7 +1733,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         const result = await runLLMConnectivityMonitorCheck({ notify: body.notify === true, forceNotify: body.forceNotify === true || body.notify === true })
         const status = getActivationStatus()
         emitEvent('llm_connectivity_checked', { profiles: status.profiles, result })
-        emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover })
+        emitEvent('llm_profiles_updated', { activeProfileId: status.activeProfileId, profiles: status.profiles, failover: status.failover, routing: status.routing })
         return jsonResponse(res, 200, { ...result, profiles: status.profiles })
       } catch (err) {
         return jsonResponse(res, 400, { ok: false, error: err.message })

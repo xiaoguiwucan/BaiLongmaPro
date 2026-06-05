@@ -3,7 +3,7 @@ import { WechatyBuilder, ScanStatus } from 'wechaty'
 import { PuppetWechat4u } from 'wechaty-puppet-wechat4u'
 import { FileBox } from 'file-box'
 import { archiveWeChatGroupMessage, buildWeChatGroupCommandPrompt, formatGroupLine, getRecentWeChatGroupMessages, isGroupSummaryRequest, makeWeChatGroupExternalId, WECHAT_GROUP_CHANNEL } from './wechat-groups.js'
-import { getWechatyDutyGroupConfig, getWeChatGroupArchiveConfig, getWeChatGroupDigestConfig, setWechatyDutyGroupConfig, setWechatyDutyGroupRuntime } from '../config.js'
+import { getWechatyDutyGroupConfig, getWeChatGroupArchiveConfig, getWeChatGroupDigestConfig, resolveLLMProfileForGroup, setWechatyDutyGroupConfig, setWechatyDutyGroupRuntime } from '../config.js'
 import { recordWeChatGroupMessage, recordWeChatGroupAssistantReply, recordWeChatGroupExplicitMemories } from './wechat-group-memory.js'
 import { buildWeChatGroupStatsDigest, getWeChatGroupStats, isWeChatInternalIdLike, listWeChatGroupMembers, normalizeWechatMessageType, normalizeWeChatGroupDisplayText, recordWeChatGroupActivity, upsertWeChatGroupMemberName } from './wechat-group-stats.js'
 import { renderWeChatGroupStatsPosterPng } from './wechat-group-report-renderer.js'
@@ -486,7 +486,7 @@ function shouldReviewWechatImageAmbientDecision(decision = {}, imageContext = nu
   return Math.abs(score - threshold) <= 15
 }
 
-async function reviewWechatImageAmbientDecision({ decision = {}, imageContext = null, groupExternalId = '', groupName = '', senderName = '', text = '' } = {}) {
+async function reviewWechatImageAmbientDecision({ decision = {}, imageContext = null, groupId = '', groupExternalId = '', groupName = '', senderName = '', text = '' } = {}) {
   if (!shouldReviewWechatImageAmbientDecision(decision, imageContext)) return decision
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort('image ambient review timeout'), WECHAT_IMAGE_REPLY_REVIEW_TIMEOUT_MS)
@@ -520,6 +520,7 @@ async function reviewWechatImageAmbientDecision({ decision = {}, imageContext = 
       },
     }
     const { callLLM } = await import('../llm.js')
+    const llmRoute = resolveLLMProfileForGroup({ groupId, groupName })
     const result = await callLLM({
       systemPrompt,
       message: JSON.stringify(payload),
@@ -531,6 +532,7 @@ async function reviewWechatImageAmbientDecision({ decision = {}, imageContext = 
       maxToolRounds: 1,
       suppressToolLogs: true,
       signal: controller.signal,
+      llmProfileId: llmRoute.profileId || '',
     })
     const parsed = parseJsonObjectFromText(result?.content || '')
     if (!parsed || typeof parsed.should_reply !== 'boolean') return decision
@@ -2289,6 +2291,7 @@ ${imageVisionText}`.trim() : rawText
       ambientDecision = await reviewWechatImageAmbientDecision({
         decision: ambientDecision,
         imageContext: ambientDecision.image_context || imageReplyContext,
+        groupId,
         groupExternalId,
         groupName: topic,
         senderName,
@@ -2410,6 +2413,16 @@ ${imageVisionText}`.trim() : rawText
       return
     }
 
+    const llmRoute = resolveLLMProfileForGroup({ groupId, groupName: topic })
+    const llmRoutePublic = {
+      mode: llmRoute.mode || 'global',
+      inherited: llmRoute.inherited !== false,
+      profileId: llmRoute.profileId || '',
+      profileName: llmRoute.publicProfile?.name || '',
+      provider: llmRoute.publicProfile?.providerLabel || llmRoute.publicProfile?.provider || '',
+      model: llmRoute.publicProfile?.model || '',
+    }
+
     emitEventRef?.('message_in', {
       from_id: groupExternalId,
       content: formatGroupLine(senderName, replyText),
@@ -2439,6 +2452,11 @@ ${imageVisionText}`.trim() : rawText
         message_type: messageType || '',
         wechat_admin: adminVerified,
         mentioned_members: mentionedMembers,
+        llm_profile_id: llmRoutePublic.profileId,
+        llm_profile_mode: llmRoutePublic.mode,
+        llm_profile_inherited: llmRoutePublic.inherited,
+        llm_profile_name: llmRoutePublic.profileName,
+        llm_profile_model: llmRoutePublic.model,
       },
       timestamp: new Date().toISOString(),
     })
@@ -2473,6 +2491,11 @@ ${imageVisionText}`.trim() : rawText
       message_type: messageType || '',
       wechat_admin: adminVerified,
       mentioned_members: mentionedMembers,
+      llm_profile_id: llmRoutePublic.profileId,
+      llm_profile_mode: llmRoutePublic.mode,
+      llm_profile_inherited: llmRoutePublic.inherited,
+      llm_profile_name: llmRoutePublic.profileName,
+      llm_profile_model: llmRoutePublic.model,
     }
     const prompt = await buildWeChatGroupCommandPrompt({
       groupId,

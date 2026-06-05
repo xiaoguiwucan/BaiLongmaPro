@@ -199,6 +199,10 @@ export const DEFAULT_LLM_CONNECTIVITY_MONITOR = {
   notifyMentionsByGroup: {},
 }
 
+export const DEFAULT_LLM_ROUTING_CONFIG = {
+  groupOverrides: [],
+}
+
 export const DEFAULT_HOTSPOT_ALERT_CONFIG = {
   enabled: false,
   intervalMinutes: 10,
@@ -371,6 +375,41 @@ function normalizeLLMConnectivityMonitorConfig(value = {}) {
   }
 }
 
+function normalizeLLMGroupRoutingConfig(value = {}, profiles = []) {
+  const raw = value && typeof value === 'object' ? value : {}
+  const validIds = new Set((Array.isArray(profiles) ? profiles : [])
+    .map(profile => String(profile?.id || '').trim())
+    .filter(Boolean))
+  const rows = Array.isArray(raw.groupOverrides)
+    ? raw.groupOverrides
+    : Array.isArray(raw.groups)
+      ? raw.groups
+      : Array.isArray(raw.overrides)
+        ? raw.overrides
+        : []
+  const seen = new Set()
+  const groupOverrides = []
+  for (const item of rows) {
+    if (!item || typeof item !== 'object') continue
+    const groupId = String(item.groupId || item.group_id || item.id || '').trim()
+    const groupName = String(item.groupName || item.group_name || item.topic || item.name || '').trim()
+    const profileId = String(item.profileId || item.profile_id || item.llmProfileId || item.llm_profile_id || '').trim()
+    if ((!groupId && !groupName) || !profileId) continue
+    if (validIds.size && !validIds.has(profileId)) continue
+    const key = groupId ? `id:${groupId}` : `name:${groupName.toLowerCase()}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    groupOverrides.push({
+      groupId,
+      groupName,
+      profileId,
+      updatedAt: item.updatedAt || item.updated_at || nowIso(),
+    })
+    if (groupOverrides.length >= 200) break
+  }
+  return { groupOverrides }
+}
+
 function normalizeHotspotAlertConfig(value = {}) {
   const interval = Number(value.intervalMinutes)
   const topN = Number(value.topN ?? value.top_n)
@@ -510,6 +549,7 @@ function readStoredConfig(parsed = readConfigObject()) {
     if (!parsed || typeof parsed !== 'object') return null
     const profiles = normalizeStoredLLMProfiles(parsed)
     const activeProfile = chooseActiveLLMProfile(parsed, profiles)
+    const llmRouting = normalizeLLMGroupRoutingConfig(parsed.llmRouting || parsed.llm_routing, profiles)
     if (activeProfile) {
       return {
         ...parsed,
@@ -521,6 +561,7 @@ function readStoredConfig(parsed = readConfigObject()) {
         llmProfiles: profiles,
         llmFailover: normalizeLLMFailoverConfig(parsed.llmFailover),
         llmConnectivityMonitor: normalizeLLMConnectivityMonitorConfig(parsed.llmConnectivityMonitor),
+        llmRouting,
         hotspotAlerts: normalizeHotspotAlertConfig(parsed.hotspotAlerts),
       }
     }
@@ -528,11 +569,11 @@ function readStoredConfig(parsed = readConfigObject()) {
     if (parsed.provider === 'custom') {
       if (!parsed.baseURL || typeof parsed.baseURL !== 'string') return null
       if (!parsed.model || typeof parsed.model !== 'string') return null
-      return { ...parsed, llmProfiles: [], llmFailover: normalizeLLMFailoverConfig(parsed.llmFailover), llmConnectivityMonitor: normalizeLLMConnectivityMonitorConfig(parsed.llmConnectivityMonitor), hotspotAlerts: normalizeHotspotAlertConfig(parsed.hotspotAlerts) }
+      return { ...parsed, llmProfiles: [], llmFailover: normalizeLLMFailoverConfig(parsed.llmFailover), llmConnectivityMonitor: normalizeLLMConnectivityMonitorConfig(parsed.llmConnectivityMonitor), llmRouting, hotspotAlerts: normalizeHotspotAlertConfig(parsed.hotspotAlerts) }
     }
     if (!PROVIDER_CONFIG[parsed.provider]) return null
     if (!parsed.apiKey || typeof parsed.apiKey !== 'string') return null
-    return { ...parsed, llmProfiles: [], llmFailover: normalizeLLMFailoverConfig(parsed.llmFailover), llmConnectivityMonitor: normalizeLLMConnectivityMonitorConfig(parsed.llmConnectivityMonitor), hotspotAlerts: normalizeHotspotAlertConfig(parsed.hotspotAlerts) }
+    return { ...parsed, llmProfiles: [], llmFailover: normalizeLLMFailoverConfig(parsed.llmFailover), llmConnectivityMonitor: normalizeLLMConnectivityMonitorConfig(parsed.llmConnectivityMonitor), llmRouting, hotspotAlerts: normalizeHotspotAlertConfig(parsed.hotspotAlerts) }
   } catch {
     return null
   }
@@ -606,6 +647,7 @@ export const config = {
   llmProfiles: [],
   llmFailover: { ...DEFAULT_LLM_FAILOVER },
   llmConnectivityMonitor: { ...DEFAULT_LLM_CONNECTIVITY_MONITOR },
+  llmRouting: { ...DEFAULT_LLM_ROUTING_CONFIG },
   hotspotAlerts: { ...DEFAULT_HOTSPOT_ALERT_CONFIG },
   needsActivation: true,
   temperature: 0.5,
@@ -623,6 +665,7 @@ if (stored) {
   config.activeLLMProfileId = stored.activeLLMProfileId || config.llmProfiles[0]?.id || null
   config.llmFailover = normalizeLLMFailoverConfig(stored.llmFailover)
   config.llmConnectivityMonitor = normalizeLLMConnectivityMonitorConfig(stored.llmConnectivityMonitor)
+  config.llmRouting = normalizeLLMGroupRoutingConfig(stored.llmRouting, config.llmProfiles)
   config.hotspotAlerts = normalizeHotspotAlertConfig(stored.hotspotAlerts)
   applyConfig(stored.provider, stored.apiKey, stored.model, stored.baseURL)
 } else if (shouldAllowEnvFallback()) {
@@ -705,6 +748,17 @@ function publicLLMProfile(profile = {}) {
   }
 }
 
+function publicLLMGroupOverride(item = {}) {
+  const profile = config.llmProfiles.find(p => p.id === item.profileId)
+  return {
+    groupId: item.groupId || '',
+    groupName: item.groupName || '',
+    profileId: item.profileId || '',
+    profile: profile ? publicLLMProfile(profile) : null,
+    updatedAt: item.updatedAt || '',
+  }
+}
+
 function persistLLMState(extra = {}) {
   const existing = readConfigObject() || {}
   const active = getActiveLLMProfile()
@@ -719,6 +773,7 @@ function persistLLMState(extra = {}) {
     llmProfiles: config.llmProfiles,
     llmFailover: normalizeLLMFailoverConfig(config.llmFailover),
     llmConnectivityMonitor: normalizeLLMConnectivityMonitorConfig(config.llmConnectivityMonitor),
+    llmRouting: normalizeLLMGroupRoutingConfig(config.llmRouting, config.llmProfiles),
     hotspotAlerts: normalizeHotspotAlertConfig(config.hotspotAlerts),
   }
   writeStoredConfig(next)
@@ -853,6 +908,7 @@ export function getActivationStatus() {
     activeProfileId: config.activeLLMProfileId,
     profiles: config.llmProfiles.map(publicLLMProfile),
     failover: getLLMFailoverConfig(),
+    routing: getLLMGroupRoutingConfig(),
   }
 }
 
@@ -889,6 +945,87 @@ export function setLLMConnectivityMonitorConfig(updates = {}) {
   return getLLMConnectivityMonitorConfig()
 }
 
+export function getLLMGroupRoutingConfig() {
+  config.llmRouting = normalizeLLMGroupRoutingConfig(config.llmRouting, config.llmProfiles)
+  const active = getActiveLLMProfile()
+  return {
+    globalProfileId: config.activeLLMProfileId || '',
+    globalProfile: active ? publicLLMProfile(active) : null,
+    groupOverrides: config.llmRouting.groupOverrides.map(publicLLMGroupOverride),
+  }
+}
+
+export function setLLMGroupRoutingConfig(updates = {}) {
+  const validIds = new Set(config.llmProfiles.map(profile => String(profile.id || '')).filter(Boolean))
+  const rows = Array.isArray(updates.groupOverrides)
+    ? updates.groupOverrides
+    : Array.isArray(updates.groups)
+      ? updates.groups
+      : Array.isArray(updates.overrides)
+        ? updates.overrides
+        : []
+  const badIds = []
+  for (const item of rows) {
+    const profileId = String(item?.profileId || item?.profile_id || item?.llmProfileId || item?.llm_profile_id || '').trim()
+    if (profileId && !validIds.has(profileId)) badIds.push(profileId)
+  }
+  if (badIds.length) throw new Error(`未找到这些模型配置：${[...new Set(badIds)].join('、')}`)
+  config.llmRouting = normalizeLLMGroupRoutingConfig({ groupOverrides: rows }, config.llmProfiles)
+  persistLLMState()
+  return getLLMGroupRoutingConfig()
+}
+
+function normalizeLLMGroupLookupValue(value = '') {
+  return String(value || '').trim().replace(/\s+/gu, ' ').toLowerCase()
+}
+
+function llmGroupLookupKeys({ groupId = '', groupName = '' } = {}) {
+  const id = String(groupId || '').trim()
+  const name = normalizeLLMGroupLookupValue(groupName)
+  const keys = new Set()
+  if (id) {
+    keys.add(`id:${id}`)
+    if (id.startsWith('wechaty:')) keys.add(`id:${id.slice('wechaty:'.length)}`)
+    else keys.add(`id:wechaty:${id}`)
+  }
+  if (name) keys.add(`name:${name}`)
+  return keys
+}
+
+export function resolveLLMProfileForGroup({ groupId = '', groupName = '' } = {}) {
+  config.llmRouting = normalizeLLMGroupRoutingConfig(config.llmRouting, config.llmProfiles)
+  const keys = llmGroupLookupKeys({ groupId, groupName })
+  const override = config.llmRouting.groupOverrides.find(item => {
+    const rowKeys = llmGroupLookupKeys({ groupId: item.groupId, groupName: item.groupName })
+    for (const key of rowKeys) if (keys.has(key)) return true
+    return false
+  })
+  const profile = override?.profileId
+    ? config.llmProfiles.find(item => item.id === override.profileId)
+    : null
+  if (profile) {
+    return {
+      mode: 'group',
+      inherited: false,
+      profileId: profile.id,
+      profile,
+      publicProfile: publicLLMProfile(profile),
+      groupId: override.groupId || groupId || '',
+      groupName: override.groupName || groupName || '',
+    }
+  }
+  const active = getActiveLLMProfile()
+  return {
+    mode: 'global',
+    inherited: true,
+    profileId: config.activeLLMProfileId || '',
+    profile: active,
+    publicProfile: active ? publicLLMProfile(active) : null,
+    groupId: groupId || '',
+    groupName: groupName || '',
+  }
+}
+
 export function getHotspotAlertConfig() {
   return normalizeHotspotAlertConfig(config.hotspotAlerts)
 }
@@ -904,6 +1041,10 @@ export function getLLMProfiles() {
 }
 
 export function getLLMFailoverCandidates() {
+  return getLLMFailoverCandidatesForProfile()
+}
+
+export function getLLMFailoverCandidatesForProfile(preferredProfileId = '') {
   const profiles = config.llmProfiles
     .filter(p => p && p.enabled !== false && p.apiKey && p.model && p.provider)
     .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0))
@@ -920,11 +1061,15 @@ export function getLLMFailoverCandidates() {
     }, 0)
     return fallback ? [fallback] : []
   }
-  const active = config.activeLLMProfileId
+  const preferred = preferredProfileId
+    ? profiles.find(p => p.id === preferredProfileId)
+    : null
+  const active = !preferred && config.activeLLMProfileId
     ? profiles.find(p => p.id === config.activeLLMProfileId)
     : null
-  const ordered = active
-    ? [active, ...profiles.filter(p => p.id !== active.id)]
+  const first = preferred || active
+  const ordered = first
+    ? [first, ...profiles.filter(p => p.id !== first.id)]
     : profiles
   const now = Date.now()
   const available = ordered.filter(p => {
@@ -1090,6 +1235,9 @@ export function deleteLLMProfile(id) {
       config.needsActivation = true
     }
   }
+  config.llmRouting = normalizeLLMGroupRoutingConfig({
+    groupOverrides: (config.llmRouting?.groupOverrides || []).filter(item => item?.profileId !== removed.id),
+  }, config.llmProfiles)
   persistLLMState()
   return { removedId: removed.id, profiles: getLLMProfiles(), activeProfileId: config.activeLLMProfileId }
 }
@@ -1105,6 +1253,8 @@ export function deactivate() {
       activeLLMProfileId: _activeLLMProfileId,
       llmProfiles: _llmProfiles,
       llmFailover: _llmFailover,
+      llmRouting: _llmRouting,
+      llm_routing: _llmRoutingSnake,
       activatedAt: _activatedAt,
       ...rest
     } = existing
@@ -1116,6 +1266,7 @@ export function deactivate() {
   config.baseURL = null
   config.activeLLMProfileId = null
   config.llmProfiles = []
+  config.llmRouting = { ...DEFAULT_LLM_ROUTING_CONFIG }
   config.needsActivation = true
 }
 

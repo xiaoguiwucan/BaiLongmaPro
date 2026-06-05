@@ -1278,6 +1278,7 @@ async function runTurn(input, label, msg = null, options = {}) {
       maxTokens: undefined,
       temperature: config.temperature,
       signal: controller.signal,
+      llmProfileId: msg?.social?.llm_profile_id || msg?.social?.llmProfileId || '',
       toolContext,
       mustReply: !!msg?.fromId,
       stopAfterSuccessfulSendMessage: isWechatyDutyGroupReplyTurn(msg) ? shouldStopAfterWechatyGroupSendMessage : false,
