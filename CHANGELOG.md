@@ -2,6 +2,19 @@
 
 所有重要版本都需要在这里写清楚：版本号、日期、改动内容、部署/备份注意事项。以后每次升级版本，必须同步更新 `package.json`、`package-lock.json`、`README.md`、`BACKUP-YYYY-MM-DD.md` 和 Brain UI 设置页里的更新说明。
 
+## v0.4.95 - 2026-06-05
+
+### 修复
+- 修复 GitHub Actions Release workflow 中 Windows 与 macOS 矩阵并发发布同一 tag 时抢建同一个 GitHub Release，导致 macOS 发布阶段出现 `already_exists field=tag_name` 422 错误的问题；发布矩阵现在串行执行，保留单平台手动补发能力。
+
+### 验证
+- 通过 PowerShell 检查 `.github/workflows/release.yml` 包含 `max-parallel: 1`。
+- 通过 `node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"`。
+- 通过 `git diff --check`。
+
+### 部署/备份注意事项
+- 已存在的远端 `v0.4.94` 标签不改写；本次以 `v0.4.95` 新标签触发发布，避免覆盖既有发布历史。
+
 ## v0.4.94 - 2026-06-05
 
 ### 修复
