@@ -2,7 +2,7 @@
 
 所有重要版本都需要在这里写清楚：版本号、日期、改动内容、部署/备份注意事项。以后每次升级版本，必须同步更新 `package.json`、`package-lock.json`、`README.md`、`BACKUP-YYYY-MM-DD.md` 和 Brain UI 设置页里的更新说明。
 
-## v0.4.96 - 2026-06-05
+## v0.4.98 - 2026-06-06
 
 ### 新增
 - 新增微信群组专用备份/迁移模块，格式为 `bailongma.wechat_group_backup`，按群导出 `wechat_group_activity`、`wechat_group_messages`、`wechat_group_memory_items`、`wechat_group_member_names`、`wechat_member_identities`、`wechat_member_identity_aliases` 和 `wechat_group_media_items`。
@@ -46,7 +46,7 @@
 - 通过人工检查 `AGENTS.md` 文档规则位置与 `CHANGELOG.md` 记录一致。
 
 ### 部署/备份注意事项
-- 已存在的远端 `v0.4.95` 及更早标签不改写；本次以 `v0.4.96` 新标签触发发布，避免覆盖既有发布历史。
+- 已存在的远端 `v0.4.97` 及更早标签不改写；本次以 `v0.4.98` 新标签触发发布，避免覆盖既有发布历史。
 - 本版本会新增导入台账表 `wechat_group_backup_imports` 和 `wechat_group_backup_import_rows`，不删除旧数据。
 - 群组备份文件包含聊天内容和图片解析结果，本身是敏感文件；文件名不包含群名或账号名，迁移后请自行妥善保存或删除。
 - 完整媒体模式会写入 base64，备份可能较大；单个超过 20MB 的媒体文件会跳过文件本体但保留解析元数据。

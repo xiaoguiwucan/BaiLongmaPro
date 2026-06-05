@@ -2034,10 +2034,10 @@ const createSettingsModal = () => `
               <div class="release-notes-list">
               <article class="release-note-card">
                 <div class="release-note-head">
-                  <span class="release-note-version">v0.4.96</span>
-                  <span class="release-note-date">2026-06-05</span>
+	                  <span class="release-note-version">v0.4.98</span>
+	                  <span class="release-note-date">2026-06-06</span>
                 </div>
-                <p class="release-note-summary">新增微信群组备份与迁移：按群安全迁移聊天流水、图片解析、群记忆和成员记忆。</p>
+	                <p class="release-note-summary">新增微信群组备份与迁移，并修复多模态 Skill 真实模型测试与反馈。</p>
                 <ul class="release-note-points">
                   <li>数据库页新增“群组备份与迁移”，支持搜索群组、勾选导出、完整媒体/仅元数据模式和导入预览。</li>
 	                  <li>备份只包含微信群数据白名单，排除 LLM、Skill、知识库、密钥、token、embedding 和 Honcho 同步字段。</li>
