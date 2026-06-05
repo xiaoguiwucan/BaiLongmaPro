@@ -188,172 +188,237 @@ const createSettingsModal = () => `
         </div>
 
         <!-- ── LLM 模型 tab ── -->
-        <div class="settings-tab" data-tab="llm">
-          <div class="settings-section">
-            <div class="settings-section-label">当前状态</div>
-            <div class="settings-config-row">
-              <span class="settings-config-type">LLM</span>
-              <span class="settings-config-info" id="settings-cfg-llm">—</span>
-              <span class="settings-config-dot" id="settings-cfg-llm-dot"></span>
-            </div>
-            <p class="settings-hint">可以配置多个 LLM 模型。当前模型没额度、限流、认证失败或服务异常时，会按优先级自动切换到下一个可用模型。</p>
-            <div class="llm-active-strip" id="settings-llm-current-profile">当前使用：—</div>
-          </div>
-          <div class="settings-section">
-            <div class="settings-section-label">自动切换策略</div>
-            <div class="llm-failover-panel">
-              <label class="llm-failover-toggle">
-                <input id="settings-llm-failover-enabled" type="checkbox">
-                <span>
-                  <b>额度不足/限流时自动切换备用模型</b>
-                  <em>推荐开启。只在回答尚未输出时切换，避免重复播报和内容断裂。</em>
-                </span>
-              </label>
-              <div class="settings-row compact">
-                <label class="settings-label" for="settings-llm-failover-cooldown">失败冷却</label>
-                <select class="settings-select" id="settings-llm-failover-cooldown">
-                  <option value="60">1 分钟</option>
-                  <option value="180">3 分钟（推荐）</option>
-                  <option value="300">5 分钟</option>
-                  <option value="600">10 分钟</option>
-                </select>
-                <label class="settings-label" for="settings-llm-failover-attempts">最多尝试</label>
-                <select class="settings-select" id="settings-llm-failover-attempts">
-                  <option value="2">2 个模型</option>
-                  <option value="3">3 个模型</option>
-                  <option value="4">4 个模型（推荐）</option>
-                  <option value="6">6 个模型</option>
-                </select>
-              </div>
-              <div class="settings-row-action">
-                <button class="settings-save-btn" id="settings-save-llm-failover" type="button">保存策略</button>
-                <span class="settings-feedback" id="settings-llm-failover-feedback"></span>
-              </div>
-            </div>
-          </div>
-          <div class="settings-section">
-            <div class="settings-section-label">渠道连通通知</div>
-            <p class="settings-hint">定时检测你选择的 LLM 渠道是否还能连通，并按策略把结果发到指定微信群；每个通知群都可以继续选择要 @ 的群成员。检测只发一个极短 ping，不会泄露 API Key。</p>
-            <div class="llm-monitor-panel">
-              <div class="llm-monitor-head">
-                <label class="llm-failover-toggle">
-                  <input id="settings-llm-monitor-enabled" type="checkbox">
-                  <span>
-                    <b>启用 LLM 渠道连通通知</b>
-                    <em>建议选择“异常/恢复变化通知”，避免群里被正常巡检刷屏。</em>
-                  </span>
-                </label>
-                <div class="llm-monitor-status" id="settings-llm-monitor-status">尚未检测</div>
-              </div>
-              <div class="llm-monitor-controls">
-                <label>通知间隔
-                  <select class="settings-select llm-monitor-select" id="settings-llm-monitor-interval">
-                    <option value="5">每 5 分钟</option>
-                    <option value="15">每 15 分钟</option>
-                    <option value="30">每 30 分钟</option>
-                    <option value="60">每 1 小时（推荐）</option>
-                    <option value="180">每 3 小时</option>
-                    <option value="360">每 6 小时</option>
-                    <option value="720">每 12 小时</option>
-                    <option value="1440">每天一次</option>
-                  </select>
-                </label>
-                <label>通知策略
-                  <select class="settings-select llm-monitor-select" id="settings-llm-monitor-mode">
-                    <option value="changes">异常/恢复变化通知（推荐）</option>
-                    <option value="failures">只通知不通渠道</option>
-                    <option value="all">每次检测都通知</option>
-                  </select>
-                </label>
-              </div>
-              <div class="llm-monitor-picker-grid">
-                <div class="llm-monitor-picker">
-                  <div class="llm-monitor-picker-head"><b>选择检测渠道</b><span id="settings-llm-monitor-profile-count">—</span></div>
-                  <div class="llm-monitor-list" id="settings-llm-monitor-profile-list">
-                    <div class="llm-profile-empty">正在读取模型池…</div>
-                  </div>
+        <div class="settings-tab llm-settings-tab" data-tab="llm">
+          <div class="llm-center-shell">
+            <section class="settings-section llm-center-overview">
+              <div class="llm-overview-copy">
+                <div class="settings-section-label">模型配置中心</div>
+                <div class="settings-config-row">
+                  <span class="settings-config-type">LLM</span>
+                  <span class="settings-config-info" id="settings-cfg-llm">—</span>
+                  <span class="settings-config-dot" id="settings-cfg-llm-dot"></span>
                 </div>
-                <div class="llm-monitor-picker">
-                  <div class="llm-monitor-picker-head"><b>选择通知微信群</b><span id="settings-llm-monitor-group-count">—</span></div>
-                  <div class="llm-monitor-list" id="settings-llm-monitor-group-list">
-                    <div class="llm-profile-empty">先登录/恢复微信群助手后选择通知群。</div>
-                  </div>
+                <p class="settings-hint">集中管理对话模型池。当前模型就是全局默认；微信群可继承全局配置，也可指定专属 LLM。</p>
+                <div class="llm-active-strip" id="settings-llm-current-profile">当前使用：—</div>
+              </div>
+              <div class="llm-summary-grid" id="settings-llm-summary-grid">
+                <div class="llm-summary-card primary">
+                  <small>当前模型</small>
+                  <b id="settings-llm-summary-current">—</b>
+                </div>
+                <div class="llm-summary-card">
+                  <small>已保存</small>
+                  <b id="settings-llm-summary-total">0 个</b>
+                </div>
+                <div class="llm-summary-card ok">
+                  <small>连通</small>
+                  <b id="settings-llm-summary-ok">0 个</b>
+                </div>
+                <div class="llm-summary-card bad">
+                  <small>失败 / 未知</small>
+                  <b id="settings-llm-summary-bad">0 / 0</b>
+                </div>
+                <div class="llm-summary-card">
+                  <small>最近检测</small>
+                  <b id="settings-llm-summary-last">—</b>
                 </div>
               </div>
-              <div class="llm-monitor-result" id="settings-llm-monitor-result">检测结果会显示在这里。</div>
-              <div class="settings-row-action">
-                <button class="settings-save-btn" id="settings-save-llm-monitor" type="button">保存通知设置</button>
-                <button class="settings-save-btn" id="settings-test-llm-monitor" type="button">立即检测</button>
-                <button class="settings-save-btn primary" id="settings-notify-llm-monitor" type="button">立即检测并通知</button>
-                <span class="settings-feedback" id="settings-llm-monitor-feedback"></span>
+            </section>
+
+            <div class="llm-center-layout">
+              <section class="settings-section llm-model-pool-section">
+                <div class="llm-section-head">
+                  <div>
+                    <div class="settings-section-label">模型池优先级</div>
+                    <p class="settings-hint">排在上面的优先使用。关闭后不参与自动切换；点击“设为当前”会成为全局默认模型。</p>
+                  </div>
+                  <span id="settings-llm-batch-count">已选 0 个</span>
+                </div>
+                <div class="llm-batch-toolbar">
+                  <div class="llm-batch-actions">
+                    <button class="settings-save-btn" id="settings-llm-batch-all" type="button">全选</button>
+                    <button class="settings-save-btn" id="settings-llm-batch-clear" type="button">清空选择</button>
+                    <button class="settings-save-btn" id="settings-llm-test-selected" type="button">测试选中</button>
+                    <button class="settings-save-btn primary" id="settings-llm-test-all" type="button">测试全部</button>
+                  </div>
+                </div>
+                <div class="llm-batch-result" id="settings-llm-batch-result">批量测试结果会显示在这里。</div>
+                <div class="llm-profile-list" id="settings-llm-pool-list">
+                  <div class="llm-profile-empty">还没有模型配置，先在右侧添加一个。</div>
+                </div>
+              </section>
+
+              <aside class="llm-center-side">
+                <section class="settings-section llm-editor-section" id="settings-llm-editor-section">
+                  <div class="settings-section-label">新增 / 编辑模型</div>
+                  <input id="settings-llm-editing-id" type="hidden" value="">
+                  <div class="settings-row">
+                    <label class="settings-label" for="settings-llm-profile-name">名称</label>
+                    <input class="settings-input" id="settings-llm-profile-name" type="text" placeholder="如：主力 DeepSeek、备用 Qwen、公司 OpenAI">
+                  </div>
+                  <div class="settings-row">
+                    <label class="settings-label" for="settings-provider-select">提供商</label>
+                    <select class="settings-select" id="settings-provider-select">
+                      <option value="auto">自动识别</option>
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="minimax">MiniMax</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="qwen">Qwen / 阿里百炼</option>
+                      <option value="moonshot">Moonshot</option>
+                      <option value="zhipu">智谱</option>
+                      <option value="mimo">小米 MiMo</option>
+                      <option value="custom">自定义端点（本地/其他）</option>
+                    </select>
+                  </div>
+                  <div class="settings-row" id="settings-model-row">
+                    <label class="settings-label" for="settings-model-select">模型</label>
+                    <select class="settings-select" id="settings-model-select"></select>
+                  </div>
+                  <div id="settings-custom-llm-section" style="display:none;">
+                    <div class="settings-row">
+                      <label class="settings-label" for="settings-custom-baseurl">Base URL</label>
+                      <input class="settings-input" id="settings-custom-baseurl" type="text" placeholder="如 http://localhost:11434/v1">
+                    </div>
+                    <div class="settings-row">
+                      <label class="settings-label" for="settings-custom-model">模型名称</label>
+                      <input class="settings-input" id="settings-custom-model" type="text" placeholder="如 llama3.2, qwen2.5, mistral">
+                    </div>
+                  </div>
+                  <div class="settings-row">
+                    <label class="settings-label" for="settings-llm-key">API Key</label>
+                    <input class="settings-input" id="settings-llm-key" type="password" placeholder="新增必填；编辑时留空表示继续使用原 Key" autocomplete="new-password">
+                  </div>
+                  <div class="settings-row-action">
+                    <button class="settings-save-btn" id="settings-save-llm" type="button">保存到模型池</button>
+                    <button class="settings-save-btn" id="settings-save-llm-current" type="button">保存并设为当前</button>
+                    <span class="settings-feedback" id="settings-llm-feedback"></span>
+                  </div>
+                </section>
+
+                <section class="settings-section llm-routing-section">
+                  <div class="settings-section-label">微信群模型路由</div>
+                  <div class="llm-routing-panel">
+                    <div class="llm-routing-head">
+                      <div>
+                        <b>全局默认由当前模型决定</b>
+                        <em id="settings-llm-routing-global">全局默认：正在读取…</em>
+                      </div>
+                      <span id="settings-llm-routing-count">—</span>
+                    </div>
+                    <div class="llm-routing-list" id="settings-llm-routing-list">
+                      <div class="llm-profile-empty">正在读取微信群与模型池…</div>
+                    </div>
+                    <div class="settings-row-action">
+                      <button class="settings-save-btn primary" id="settings-save-llm-routing" type="button">保存群路由</button>
+                      <span class="settings-feedback" id="settings-llm-routing-feedback"></span>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="settings-section llm-policy-section">
+                  <div class="settings-section-label">策略与温度</div>
+                  <div class="llm-failover-panel">
+                    <label class="llm-failover-toggle">
+                      <input id="settings-llm-failover-enabled" type="checkbox">
+                      <span>
+                        <b>额度不足/限流时自动切换备用模型</b>
+                        <em>只在回答尚未输出时切换，避免重复播报和内容断裂。</em>
+                      </span>
+                    </label>
+                    <div class="settings-row compact">
+                      <label class="settings-label" for="settings-llm-failover-cooldown">失败冷却</label>
+                      <select class="settings-select" id="settings-llm-failover-cooldown">
+                        <option value="60">1 分钟</option>
+                        <option value="180">3 分钟（推荐）</option>
+                        <option value="300">5 分钟</option>
+                        <option value="600">10 分钟</option>
+                      </select>
+                      <label class="settings-label" for="settings-llm-failover-attempts">最多尝试</label>
+                      <select class="settings-select" id="settings-llm-failover-attempts">
+                        <option value="2">2 个模型</option>
+                        <option value="3">3 个模型</option>
+                        <option value="4">4 个模型（推荐）</option>
+                        <option value="6">6 个模型</option>
+                      </select>
+                    </div>
+                    <div class="settings-row-action">
+                      <button class="settings-save-btn" id="settings-save-llm-failover" type="button">保存策略</button>
+                      <span class="settings-feedback" id="settings-llm-failover-feedback"></span>
+                    </div>
+                  </div>
+                  <div class="llm-temperature-panel">
+                    <div class="llm-temperature-head">
+                      <b>模型温度</b>
+                      <span id="settings-temperature-val">0.50</span>
+                    </div>
+                    <input type="range" id="settings-temperature" min="0" max="1.5" step="0.05" value="0.5">
+                    <div class="settings-row-action">
+                      <button class="settings-save-btn" id="settings-save-temperature" type="button">保存温度</button>
+                      <span class="settings-feedback" id="settings-temperature-feedback"></span>
+                    </div>
+                  </div>
+                </section>
+              </aside>
+            </div>
+
+            <section class="settings-section llm-monitor-section">
+              <div class="settings-section-label">渠道连通通知</div>
+              <p class="settings-hint">定时检测你选择的 LLM 渠道是否还能连通，并按策略把结果发到指定微信群；每个通知群都可以继续选择要 @ 的群成员。</p>
+              <div class="llm-monitor-panel">
+                <div class="llm-monitor-head">
+                  <label class="llm-failover-toggle">
+                    <input id="settings-llm-monitor-enabled" type="checkbox">
+                    <span>
+                      <b>启用 LLM 渠道连通通知</b>
+                      <em>建议选择“异常/恢复变化通知”，避免群里被正常巡检刷屏。</em>
+                    </span>
+                  </label>
+                  <div class="llm-monitor-status" id="settings-llm-monitor-status">尚未检测</div>
+                </div>
+                <div class="llm-monitor-controls">
+                  <label>通知间隔
+                    <select class="settings-select llm-monitor-select" id="settings-llm-monitor-interval">
+                      <option value="5">每 5 分钟</option>
+                      <option value="15">每 15 分钟</option>
+                      <option value="30">每 30 分钟</option>
+                      <option value="60">每 1 小时（推荐）</option>
+                      <option value="180">每 3 小时</option>
+                      <option value="360">每 6 小时</option>
+                      <option value="720">每 12 小时</option>
+                      <option value="1440">每天一次</option>
+                    </select>
+                  </label>
+                  <label>通知策略
+                    <select class="settings-select llm-monitor-select" id="settings-llm-monitor-mode">
+                      <option value="changes">异常/恢复变化通知（推荐）</option>
+                      <option value="failures">只通知不通渠道</option>
+                      <option value="all">每次检测都通知</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="llm-monitor-picker-grid">
+                  <div class="llm-monitor-picker">
+                    <div class="llm-monitor-picker-head"><b>选择检测渠道</b><span id="settings-llm-monitor-profile-count">—</span></div>
+                    <div class="llm-monitor-list" id="settings-llm-monitor-profile-list">
+                      <div class="llm-profile-empty">正在读取模型池…</div>
+                    </div>
+                  </div>
+                  <div class="llm-monitor-picker">
+                    <div class="llm-monitor-picker-head"><b>选择通知微信群</b><span id="settings-llm-monitor-group-count">—</span></div>
+                    <div class="llm-monitor-list" id="settings-llm-monitor-group-list">
+                      <div class="llm-profile-empty">先登录/恢复微信群助手后选择通知群。</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="llm-monitor-result" id="settings-llm-monitor-result">检测结果会显示在这里。</div>
+                <div class="settings-row-action">
+                  <button class="settings-save-btn" id="settings-save-llm-monitor" type="button">保存通知设置</button>
+                  <button class="settings-save-btn" id="settings-test-llm-monitor" type="button">立即检测</button>
+                  <button class="settings-save-btn primary" id="settings-notify-llm-monitor" type="button">立即检测并通知</button>
+                  <span class="settings-feedback" id="settings-llm-monitor-feedback"></span>
+                </div>
               </div>
-            </div>
-          </div>
-          <div class="settings-section">
-            <div class="settings-section-label">新增 / 编辑模型</div>
-            <input id="settings-llm-editing-id" type="hidden" value="">
-            <div class="settings-row">
-              <label class="settings-label" for="settings-llm-profile-name">名称</label>
-              <input class="settings-input" id="settings-llm-profile-name" type="text" placeholder="如：主力 DeepSeek、备用 Qwen、公司 OpenAI">
-            </div>
-            <div class="settings-row">
-              <label class="settings-label" for="settings-provider-select">提供商</label>
-              <select class="settings-select" id="settings-provider-select">
-                <option value="auto">自动识别</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="minimax">MiniMax</option>
-                <option value="openai">OpenAI</option>
-                <option value="qwen">Qwen / 阿里百炼</option>
-                <option value="moonshot">Moonshot</option>
-                <option value="zhipu">智谱</option>
-                <option value="mimo">小米 MiMo</option>
-                <option value="custom">自定义端点（本地/其他）</option>
-              </select>
-            </div>
-            <div class="settings-row" id="settings-model-row">
-              <label class="settings-label" for="settings-model-select">模型</label>
-              <select class="settings-select" id="settings-model-select"></select>
-            </div>
-            <!-- 自定义端点字段（选择"自定义端点"时显示） -->
-            <div id="settings-custom-llm-section" style="display:none;">
-              <div class="settings-row">
-                <label class="settings-label" for="settings-custom-baseurl">Base URL</label>
-                <input class="settings-input" id="settings-custom-baseurl" type="text" placeholder="如 http://localhost:11434/v1">
-              </div>
-              <div class="settings-row">
-                <label class="settings-label" for="settings-custom-model">模型名称</label>
-                <input class="settings-input" id="settings-custom-model" type="text" placeholder="如 llama3.2, qwen2.5, mistral">
-              </div>
-            </div>
-            <div class="settings-row">
-              <label class="settings-label" for="settings-llm-key">API Key</label>
-              <input class="settings-input" id="settings-llm-key" type="password" placeholder="新增必填；编辑时留空表示继续使用原 Key" autocomplete="new-password">
-            </div>
-            <div class="settings-row-action">
-              <button class="settings-save-btn" id="settings-save-llm" type="button">保存到模型池</button>
-              <button class="settings-save-btn" id="settings-save-llm-current" type="button">保存并设为当前</button>
-              <span class="settings-feedback" id="settings-llm-feedback"></span>
-            </div>
-          </div>
-          <div class="settings-section">
-            <div class="settings-section-label">模型池优先级</div>
-            <p class="settings-hint">排在上面的优先使用。关闭某个模型后不会参与自动切换；点击“设为当前”可立即切过去。</p>
-            <div class="llm-profile-list" id="settings-llm-pool-list">
-              <div class="llm-profile-empty">还没有模型配置，先在上方添加一个。</div>
-            </div>
-          </div>
-          <div class="settings-section">
-            <div class="settings-section-label">模型温度</div>
-            <p class="settings-hint">控制回复的随机性。0 = 确定性最高，1 = 正常创意，1.5 = 更随机。推荐 0.3–0.7。</p>
-            <div class="settings-row">
-              <label class="settings-label" for="settings-temperature">Temperature</label>
-              <input type="range" id="settings-temperature" min="0" max="1.5" step="0.05" value="0.5" style="flex:1;cursor:pointer;">
-              <span id="settings-temperature-val" style="min-width:2.8em;text-align:right;color:var(--ink2);font-size:13px;">0.50</span>
-            </div>
-            <div class="settings-row-action">
-              <button class="settings-save-btn" id="settings-save-temperature" type="button">保存</button>
-              <span class="settings-feedback" id="settings-temperature-feedback"></span>
-            </div>
+            </section>
           </div>
         </div>
 

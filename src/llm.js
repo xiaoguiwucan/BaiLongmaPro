@@ -1,7 +1,7 @@
 import OpenAI from 'openai'
 import {
   config,
-  getLLMFailoverCandidates,
+  getLLMFailoverCandidatesForProfile,
   getLLMFailoverConfig,
   recordLLMProfileFailure,
   recordLLMProfileSuccess,
@@ -273,10 +273,12 @@ async function streamOnceWithProfile({ messages, toolSchemas, temperature, topP,
 // - 已经输出过内容就不切换，避免 UI/语音重复和回答断裂。
 async function streamOnce(args) {
   const failover = getLLMFailoverConfig()
-  const candidates = getLLMFailoverCandidates()
+  const preferredProfileId = String(args.llmProfileId || args.preferredProfileId || '').trim()
+  const candidates = getLLMFailoverCandidatesForProfile(preferredProfileId)
   if (!candidates.length) {
     throw new Error('LLM 尚未激活，请先在设置里添加至少一个模型')
   }
+  const useLocalPreference = !!preferredProfileId
   const maxAttempts = failover.enabled
     ? Math.min(candidates.length, Math.max(1, Number(failover.maxAttempts || candidates.length)))
     : 1
@@ -290,7 +292,7 @@ async function streamOnce(args) {
       const result = await streamOnceWithProfile(args, profile)
       if (!result?.aborted) {
         recordLLMProfileSuccess(profile.id)
-        if (profile.id && profile.id !== config.activeLLMProfileId) {
+        if (!useLocalPreference && profile.id && profile.id !== config.activeLLMProfileId) {
           selectLLMProfile(profile.id, { persist: true, reason: 'failover' })
           console.warn(`[LLM] 已自动切换到备用模型：${getProfileLabel(profile)}`)
         }
@@ -772,6 +774,7 @@ export async function callLLM({
   stopAfterTools = [],
   suppressToolLogs = false,
   stopAfterSuccessfulSendMessage = false,
+  llmProfileId = '',
 }) {
   const toolSchemas = getToolSchemas(tools)
   const roundLimit = Math.max(1, Math.min(TOOL_LOOP_LIMITS.maxRounds, Number(maxToolRounds) || TOOL_LOOP_LIMITS.maxRounds))
@@ -809,6 +812,7 @@ export async function callLLM({
       maxTokens,
       thinking,
       signal,
+      llmProfileId,
       onRetry,
       onStream,  // 所有轮次均流式推送，让 UI 实时反映工具链执行过程中的模型输出
     })
