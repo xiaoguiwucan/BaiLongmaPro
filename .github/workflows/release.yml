@@ -18,9 +18,11 @@ jobs:
         include:
           - name: Windows x64
             os: windows-latest
+            install: npm ci --no-fund --no-audit
             command: npm run publish
           - name: macOS arm64
             os: macos-latest
+            install: npm ci --ignore-scripts --no-fund --no-audit
             command: npm run publish:mac
 
     steps:
@@ -34,7 +36,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --no-fund --no-audit
+        run: ${{ matrix.install }}
 
       - name: Build and publish
         run: ${{ matrix.command }}

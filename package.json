@@ -17,7 +17,7 @@
     "build": "powershell -ExecutionPolicy Bypass -File scripts/prebuild-clean.ps1 && electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --win",
     "build:mac": "electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --mac --arm64",
     "publish": "electron-builder --win --publish always",
-    "publish:mac": "electron-builder --mac --arm64 --publish always",
+    "publish:mac": "electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --mac --arm64 --publish always",
     "postinstall": "electron-builder install-app-deps",
     "smoke:tools": "node scripts/smoke-tools.mjs",
     "smoke:brain-ui": "node scripts/smoke-brain-ui.mjs",
