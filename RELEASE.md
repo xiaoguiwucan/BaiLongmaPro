@@ -1,3 +1,18 @@
+## v0.4.93 - 2026-06-05
+
+### 发布主题
+修复 GitHub issues #8、#10、#11，并补齐自动发布 tag 前的版本信息：舆情推送关闭后停止后台轮询，微信群引用图片识图不再误用其他图片，知识库检索在 embedding 失败和群 ID 不一致时仍可正常召回。
+
+### 修复
+- 舆情推送关闭后立即停止 scheduler，直接启动调度器时也会在 `enabled=false` 下清理已有 interval。
+- 引用图片识图在存在 `svrid/msgid/newmsgid` 时只接受消息 ID 强匹配，找不到原图时提示重发，不再退回最近图片。
+- 知识库 embedding 调用失败时回退本地 hash embedding，避免空向量入库；群知识检索支持群 ID 别名、群名兜底和关键词拆分 LIKE 召回。
+
+### 验证
+- 通过 `npm run test:hotspot-alert-toggle`。
+- 通过 `npm run test:wechat-multi-mention-quote-image`。
+- 通过 `npm run test:knowledge-base-search`。
+
 ## v0.4.92 - 2026-06-03
 
 ### 发布主题

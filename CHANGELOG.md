@@ -2,7 +2,7 @@
 
 所有重要版本都需要在这里写清楚：版本号、日期、改动内容、部署/备份注意事项。以后每次升级版本，必须同步更新 `package.json`、`package-lock.json`、`README.md`、`BACKUP-YYYY-MM-DD.md` 和 Brain UI 设置页里的更新说明。
 
-## 未发布 - 2026-06-05
+## v0.4.93 - 2026-06-05
 
 ### 新增
 - 项目 Agent 规范更新：`AGENTS.md` 不再维护变更历史，所有代码、配置和项目规范变更历史统一写入 `CHANGELOG.md`；同时明确新增功能必须同步更新 `README.md`，Git 提交信息必须使用中文。
