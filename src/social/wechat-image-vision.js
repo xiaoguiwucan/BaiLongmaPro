@@ -382,8 +382,35 @@ function extractLabels(description = '') {
 
 function safeRelativePath(rel = '') {
   const value = String(rel || '').trim().replace(/\\/g, '/')
-  if (!value || value.includes('\0') || value.startsWith('/') || value.split('/').includes('..')) return ''
+  if (!value || value.includes('\0') || value.split('/').includes('..')) return ''
   return value
+}
+
+function isPathInside(parentDir, candidatePath) {
+  const rel = path.relative(path.resolve(parentDir), path.resolve(candidatePath))
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel))
+}
+
+function getWechatImageMediaFileCandidates(row = {}) {
+  const raw = String(row.relative_path || '').trim()
+  const rel = safeRelativePath(raw)
+  if (!rel) return []
+  const roots = [paths.userDir, paths.dataDir]
+    .map(dir => path.resolve(dir))
+    .filter(Boolean)
+  const candidates = []
+  const push = filePath => {
+    const resolved = path.resolve(filePath)
+    if (candidates.includes(resolved)) return
+    if (!roots.some(root => isPathInside(root, resolved))) return
+    candidates.push(resolved)
+  }
+  if (path.isAbsolute(rel)) {
+    push(rel)
+    return candidates
+  }
+  for (const root of roots) push(path.join(root, rel))
+  return candidates
 }
 
 function extractStoredMediaPaths(text = '') {
@@ -465,8 +492,8 @@ export function upsertWeChatImageMediaItem({ groupId = '', groupName = '', sende
 
 async function callVisionModel(row, runtime, cfg) {
   const base64 = row.base64 || (() => {
-    const filePath = path.join(paths.userDir, row.relative_path || '')
-    return fs.existsSync(filePath) ? fs.readFileSync(filePath).toString('base64') : ''
+    const resolved = resolveWeChatImageMediaFile(row)
+    return resolved.ok ? fs.readFileSync(resolved.filePath).toString('base64') : ''
   })()
   if (!base64) throw new Error('图片超过保存上限或文件不存在，无法转 base64 给识图模型')
   // 真实测试显示部分大图在 gpt-5.4 上需要 30 秒左右才能返回；
@@ -1161,18 +1188,17 @@ export function findWeChatImageMediaForQuote({ groupId = '', groupName = '', quo
 export function resolveWeChatImageMediaFile(row = {}) {
   const rel = safeRelativePath(row.relative_path || '')
   if (!rel) return { ok: false, error: 'invalid media path' }
-  const root = path.resolve(paths.userDir)
-  const filePath = path.resolve(root, rel)
-  const diff = path.relative(root, filePath)
-  if (!diff || diff.startsWith('..') || path.isAbsolute(diff)) return { ok: false, error: 'invalid media path' }
-  try {
-    const stat = fs.statSync(filePath)
-    if (!stat.isFile()) return { ok: false, error: 'media file not found' }
-    if (!isImageMime(inferMimeType(filePath, row.mime_type))) return { ok: false, error: 'not image' }
-    return { ok: true, filePath, bytes: stat.size, mimeType: inferMimeType(filePath, row.mime_type), relativePath: rel }
-  } catch {
-    return { ok: false, error: 'media file not found' }
+  for (const filePath of getWechatImageMediaFileCandidates(row)) {
+    try {
+      const stat = fs.statSync(filePath)
+      if (!stat.isFile()) continue
+      if (!isImageMime(inferMimeType(filePath, row.mime_type))) return { ok: false, error: 'not image' }
+      return { ok: true, filePath, bytes: stat.size, mimeType: inferMimeType(filePath, row.mime_type), relativePath: rel }
+    } catch {
+      continue
+    }
   }
+  return { ok: false, error: 'media file not found' }
 }
 
 export function updateWeChatImageMediaItem({ id, description = '', labels = [], visionStatus = 'done' } = {}) {

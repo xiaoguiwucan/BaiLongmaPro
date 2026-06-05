@@ -2,20 +2,28 @@
 
 所有重要版本都需要在这里写清楚：版本号、日期、改动内容、部署/备份注意事项。以后每次升级版本，必须同步更新 `package.json`、`package-lock.json`、`README.md`、`BACKUP-YYYY-MM-DD.md` 和 Brain UI 设置页里的更新说明。
 
-## v0.4.95 - 2026-06-05
+## v0.4.96 - 2026-06-05
 
 ### 修复
 - 修复微信群视频解析进度提示误触本机文件隐私拦截的问题；视频解析渠道测试改为真实 `chat/completions` + `video_url` 请求，避免 `/models` 可用但实际解析返回 NotFound 时被误判为可用。
 - 修复 GitHub Actions Release workflow 中 Windows 与 macOS 矩阵并发发布同一 tag 时抢建同一个 GitHub Release，导致 macOS 发布阶段出现 `already_exists field=tag_name` 422 错误的问题；发布矩阵现在串行执行，保留单平台手动补发能力。
+- 修复 GitHub issue #12：微信群图片识别在 `base64` 未保存时会同时兼容 `userDir`、`dataDir` 和安全范围内的绝对图片路径，避免历史入库图片因路径解析失败直接报“文件不存在”；同时让“解释/总结/识别图片”优先走自然语言识图回复，不再误触发“从当前群图片库发给你”的原图转发分支。
+
+### 规范
+- `AGENTS.md` 新增发布纪律：每次完成代码、配置或项目规范修改后必须新增并推送新的 Git tag 触发 GitHub Actions，禁止复用或改写既有 tag；同时要求详细说明修改内容、原因、验证结果和部署注意事项。
 
 ### 验证
 - 通过 `node --check src/social/wechat-video-analysis-skill.js`、`node --check src/social/wechaty-duty-group.js`、`node --check src/config.js` 和 `npm run test:wechat-video-analysis`。
 - 通过 PowerShell 检查 `.github/workflows/release.yml` 包含 `max-parallel: 1`。
 - 通过 `node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"`。
 - 通过 `git diff --check`。
+- 通过 `node scripts/run-electron-node.mjs scripts/test-wechat-image-reply-hotfix.mjs`。
+- 通过 `node scripts/run-electron-node.mjs scripts/test-wechat-multi-mention-quote-image.mjs`。
+- 通过 `node --check src/social/wechat-image-vision.js` 和 `node --check src/social/wechaty-duty-group.js`。
+- 通过人工检查 `AGENTS.md` 文档规则位置与 `CHANGELOG.md` 记录一致。
 
 ### 部署/备份注意事项
-- 已存在的远端 `v0.4.94` 标签不改写；本次以 `v0.4.95` 新标签触发发布，避免覆盖既有发布历史。
+- 已存在的远端 `v0.4.95` 及更早标签不改写；本次以 `v0.4.96` 新标签触发发布，避免覆盖既有发布历史。
 
 ## v0.4.94 - 2026-06-05
 

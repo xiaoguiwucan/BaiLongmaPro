@@ -2635,6 +2635,13 @@ async function tryDirectMemeReply(room, text = '', { senderId = '', senderName =
 const STORED_IMAGE_SEND_RE = /(?:发|发送|转发|传|给我|发我|拿给我|调用|调出来|找出|找一下).{0,36}(?:那张|这张|刚才|刚刚|上面|前面|原图|图片|图库|图|照片|山水画|截图|标签)|(?:那张|这张|刚才|刚刚|上面|前面|图库|标签).{0,36}(?:发|发送|转发|传|给我|发我|拿给我|调用|调出来|找出)/u
 const IMAGE_TAGGING_REQUEST_RE = /(?:给|帮|把|将|替)?(?:这张|那张|引用|上面|前面|刚才|刚刚)?(?:图片|图|照片|截图)?.{0,12}(?:打标签|加标签|标记|记住|存为|归类|命名为|叫做|设为|备注为)|(?:标签|tag|TAG)[:：]/u
 
+function hasWechatStoredImageSendIntent(text = '') {
+  const value = String(text || '')
+  if (!STORED_IMAGE_SEND_RE.test(value)) return false
+  if (hasWechatImageUnderstandingIntent(value)) return false
+  return true
+}
+
 function summarizeVisionDescription(description = '') {
   const text = String(description || '').replace(/\s+/g, ' ').trim()
   if (!text) return ''
@@ -2810,6 +2817,7 @@ export const __wechatyVideoTestInternals = {
   getRecentWechatVideoCandidate,
   hasWechatVideoReferenceIntent,
   hasWechatImageUnderstandingIntent,
+  hasWechatStoredImageSendIntent,
   getWechatImageUnderstandingGate,
   buildWechatImageEnhancedText,
   buildWechatImageReplyContext,
@@ -2832,7 +2840,7 @@ export const __wechatyVideoTestInternals = {
 
 async function tryDirectStoredImageReply(room, text = '', { senderId = '', senderName = '', groupId = '', groupName = '' } = {}) {
   const value = String(text || '')
-  if (!STORED_IMAGE_SEND_RE.test(value)) return false
+  if (!hasWechatStoredImageSendIntent(value)) return false
   if (isWechatImageGenerationRequest(value)) return false
   const found = findWeChatImageMediaForRequest({ groupId, groupName, query: value, limit: 5 })
   const item = found.items?.[0]

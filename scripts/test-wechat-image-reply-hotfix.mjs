@@ -8,6 +8,7 @@ process.env.BAILONGMA_USER_DIR = tmp
 process.env.BAILONGMA_RESOURCES_DIR = process.cwd()
 
 const {
+  resolveWeChatImageMediaFile,
   updateWeChatImageMediaItem,
   upsertWeChatImageMediaItem,
   waitForWeChatImageMediaDescription,
@@ -18,6 +19,8 @@ assert.equal(__wechatyVideoTestInternals.hasWechatImageUnderstandingIntent('别�
 assert.equal(__wechatyVideoTestInternals.hasWechatImageUnderstandingIntent('一会更新图片回复逻辑'), false)
 assert.equal(__wechatyVideoTestInternals.hasWechatImageUnderstandingIntent('提到图片两个字就解释'), false)
 assert.equal(__wechatyVideoTestInternals.hasWechatImageUnderstandingIntent('解释这张图内容'), true)
+assert.equal(__wechatyVideoTestInternals.hasWechatStoredImageSendIntent('解释这张图内容'), false)
+assert.equal(__wechatyVideoTestInternals.hasWechatStoredImageSendIntent('把刚才那张图发给我'), true)
 
 const mediaDir = path.join(tmp, 'data', 'wechat-media', 'reply-hotfix')
 fs.mkdirSync(mediaDir, { recursive: true })
@@ -41,6 +44,12 @@ const inserted = upsertWeChatImageMediaItem({
   },
 })
 assert.equal(inserted.ok, true)
+const absoluteResolved = resolveWeChatImageMediaFile({ relative_path: imagePath })
+assert.equal(absoluteResolved.ok, true)
+assert.equal(absoluteResolved.filePath, imagePath)
+const dataResolved = resolveWeChatImageMediaFile({ relative_path: path.relative(path.join(tmp, 'data'), imagePath) })
+assert.equal(dataResolved.ok, true)
+assert.equal(dataResolved.filePath, imagePath)
 
 const pending = await waitForWeChatImageMediaDescription({ mediaId: inserted.item.id, attempts: 1, intervalMs: 0 })
 assert.equal(pending.ok, false)
