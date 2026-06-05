@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import { getDB } from '../db.js'
 import { paths } from '../paths.js'
 import { nowTimestamp } from '../time.js'
-import { config, getSkillImageVisionCredentials, getSkillImageVisionRuntimeCandidates } from '../config.js'
+import { config, getSkillImageVisionCredentials, getSkillImageVisionRuntimeCandidates, getWeChatGroupArchiveConfig } from '../config.js'
 
 let schemaReady = false
 let pendingDescribeJob = null
@@ -62,6 +62,62 @@ function normalizeSearchText(value = '') {
 
 function compactSearchText(value = '') {
   return normalizeSearchText(value).replace(/[\s\p{P}\p{S}_-]+/gu, '')
+}
+
+function normalizeArchiveGroupKey(value = '') {
+  return String(value || '').trim().replace(/^wechaty:/iu, '')
+}
+
+function archiveGroupMatchesSelection({ groupId = '', groupName = '' } = {}, selected = []) {
+  const gid = normalizeArchiveGroupKey(groupId)
+  const name = String(groupName || '').trim()
+  return (Array.isArray(selected) ? selected : []).some(item => {
+    const value = String(item || '').trim()
+    if (!value) return false
+    const normalized = normalizeArchiveGroupKey(value)
+    return value === groupId
+      || value === gid
+      || normalized === gid
+      || (!!name && (value === name || name.includes(value) || value.includes(name)))
+  })
+}
+
+function getImageParseArchiveRuntimeForGroup({ groupId = '', groupName = '' } = {}) {
+  const cfg = getWeChatGroupArchiveConfig()
+  const enabled = cfg.enabled !== false
+    && cfg.recordMedia !== false
+    && cfg.parseImages !== false
+    && archiveGroupMatchesSelection({ groupId, groupName }, cfg.effectiveParseImageGroupNames)
+  return { config: cfg, enabled }
+}
+
+function appendImageParseScopeFilter(filters = [], params = []) {
+  const cfg = getWeChatGroupArchiveConfig()
+  if (cfg.enabled === false || cfg.recordMedia === false || cfg.parseImages === false) {
+    filters.push('0 = 1')
+    return
+  }
+  const selected = Array.isArray(cfg.effectiveParseImageGroupNames) ? cfg.effectiveParseImageGroupNames.map(v => String(v || '').trim()).filter(Boolean) : []
+  if (!selected.length) {
+    filters.push('0 = 1')
+    return
+  }
+  const clauses = []
+  for (const item of selected.slice(0, 300)) {
+    const key = normalizeArchiveGroupKey(item)
+    clauses.push('(group_id = ? OR group_id = ? OR group_name = ? OR group_name LIKE ?)')
+    params.push(item, key, item, `%${item}%`)
+  }
+  filters.push(`(${clauses.join(' OR ')})`)
+}
+
+function hasWechatActivityColumn(db, columnName = '') {
+  try {
+    return db.prepare(`PRAGMA table_info(wechat_group_activity)`).all()
+      .some(row => String(row?.name || '') === String(columnName || ''))
+  } catch {
+    return false
+  }
 }
 
 function pad2(value) {
@@ -737,8 +793,19 @@ export async function processPendingWeChatImageMedia({ groupId = '', groupName =
   const params = []
   const gid = String(groupId || '').trim()
   const name = String(groupName || '').trim()
-  if (gid && gid !== 'all') { filters.push(`group_id = ?`); params.push(gid) }
-  else if (name) { filters.push(`group_name = ?`); params.push(name) }
+  if (gid && gid !== 'all') {
+    const runtime = getImageParseArchiveRuntimeForGroup({ groupId: gid, groupName: name })
+    if (!runtime.enabled) return { ok: true, processed: 0, described: 0, skipped: true, reason: 'group_not_selected_for_image_parse', errors: [] }
+    filters.push(`group_id = ?`)
+    params.push(gid)
+  } else if (name) {
+    const runtime = getImageParseArchiveRuntimeForGroup({ groupName: name })
+    if (!runtime.enabled) return { ok: true, processed: 0, described: 0, skipped: true, reason: 'group_not_selected_for_image_parse', errors: [] }
+    filters.push(`group_name = ?`)
+    params.push(name)
+  } else {
+    appendImageParseScopeFilter(filters, params)
+  }
   if (!retryErrors) filters.push(`vision_status NOT IN ('error')`)
   const rows = db.prepare(`
     SELECT id
@@ -775,12 +842,28 @@ export function startWeChatImageBackgroundDescribe(options = {}) {
 export async function backfillWeChatImageMediaFromActivity({ groupId = '', groupName = '', limit = 200, describe = false } = {}) {
   ensureSchema()
   const db = getDB()
-  const filters = [`(raw_text LIKE '%[媒体文件]%' OR display_text LIKE '%[媒体文件]%')`]
+  const hasRawFull = hasWechatActivityColumn(db, 'raw_text_full')
+  const rawFullSelect = hasRawFull ? 'raw_text_full' : "'' AS raw_text_full"
+  const rawFullFilter = hasRawFull ? " OR raw_text_full LIKE '%[媒体文件]%'" : ''
+  const filters = [`(raw_text LIKE '%[媒体文件]%'${rawFullFilter} OR display_text LIKE '%[媒体文件]%')`]
   const params = []
-  if (groupId) { filters.push('group_id = ?'); params.push(String(groupId)) }
-  if (groupName) { filters.push('group_name = ?'); params.push(String(groupName)) }
+  const gid = String(groupId || '').trim()
+  const name = String(groupName || '').trim()
+  if (gid) {
+    const runtime = getImageParseArchiveRuntimeForGroup({ groupId: gid, groupName: name })
+    if (!runtime.enabled) return { ok: true, scanned: 0, imported: 0, described: 0, skipped: true, reason: 'group_not_selected_for_image_parse', errors: [] }
+    filters.push('group_id = ?')
+    params.push(gid)
+  }
+  if (name) {
+    const runtime = getImageParseArchiveRuntimeForGroup({ groupId: gid, groupName: name })
+    if (!runtime.enabled) return { ok: true, scanned: 0, imported: 0, described: 0, skipped: true, reason: 'group_not_selected_for_image_parse', errors: [] }
+    filters.push('group_name = ?')
+    params.push(name)
+  }
+  if (!gid && !name) appendImageParseScopeFilter(filters, params)
   const rows = db.prepare(`
-    SELECT id, group_id, group_name, sender_id, sender_name, message_type, raw_text, display_text, timestamp
+    SELECT id, group_id, group_name, sender_id, sender_name, message_type, raw_text, ${rawFullSelect}, display_text, timestamp
     FROM wechat_group_activity
     WHERE ${filters.join(' AND ')}
     ORDER BY id DESC
@@ -791,7 +874,7 @@ export async function backfillWeChatImageMediaFromActivity({ groupId = '', group
   let described = 0
   const errors = []
   for (const row of rows) {
-    const rels = extractStoredMediaPaths(`${row.raw_text || ''}\n${row.display_text || ''}`)
+    const rels = extractStoredMediaPaths(`${row.raw_text_full || ''}\n${row.raw_text || ''}\n${row.display_text || ''}`)
     for (const rel of rels) {
       scanned += 1
       const filePath = path.join(paths.userDir, rel)

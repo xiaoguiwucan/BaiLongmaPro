@@ -1,6 +1,6 @@
 import { getDB } from '../db.js'
 import { nowTimestamp } from '../time.js'
-import { getWeChatGroupDigestConfig } from '../config.js'
+import { getWeChatGroupArchiveConfig, getWeChatGroupDigestConfig } from '../config.js'
 import { paths } from '../paths.js'
 import fs from 'fs'
 import path from 'path'
@@ -41,6 +41,141 @@ const MINI_PROGRAM_RE = /<appmsg\b|<weappinfo\b|小程序/u
 const XML_LIKE_RE = /^<\?xml|^<msg\b|^<appmsg\b|^<sysmsg\b/iu
 
 let schemaReady = false
+let lastArchiveRetrievalMs = 0
+
+function clampChunkConfig() {
+  const cfg = getWeChatGroupArchiveConfig()
+  const size = Number(cfg.longMessageChunkSize || 1800)
+  const overlap = Number(cfg.longMessageChunkOverlap || 160)
+  return {
+    size: Number.isFinite(size) ? Math.min(8000, Math.max(500, Math.round(size))) : 1800,
+    overlap: Number.isFinite(overlap) ? Math.min(1000, Math.max(0, Math.round(overlap))) : 160,
+  }
+}
+
+function splitMessageChunks(text = '', { size = 1800, overlap = 160 } = {}) {
+  const chars = Array.from(String(text || '').trim())
+  if (!chars.length) return []
+  const safeSize = Math.min(8000, Math.max(500, Math.round(Number(size || 1800))))
+  const safeOverlap = Math.min(Math.max(0, Math.round(Number(overlap || 0))), Math.max(0, safeSize - 1))
+  if (chars.length <= safeSize) return [{ index: 0, count: 1, text: chars.join('') }]
+  const chunks = []
+  let start = 0
+  while (start < chars.length) {
+    const end = Math.min(chars.length, start + safeSize)
+    const body = chars.slice(start, end).join('').trim()
+    if (body) chunks.push({ index: chunks.length, count: 0, text: body })
+    if (end >= chars.length) break
+    start = Math.max(start + 1, end - safeOverlap)
+  }
+  const count = chunks.length
+  return chunks.map(item => ({ ...item, count }))
+}
+
+function deleteFtsRow(db, table, rowid) {
+  try { db.prepare(`DELETE FROM ${table} WHERE rowid = ?`).run(rowid) } catch {}
+}
+
+function upsertActivityFts(db, row = {}) {
+  try {
+    deleteFtsRow(db, 'wechat_group_activity_fts', row.id)
+    db.prepare(`
+      INSERT INTO wechat_group_activity_fts(rowid, display_text, raw_text_full, sender_name, sender_id)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      row.id,
+      String(row.display_text || ''),
+      String(row.raw_text_full || row.raw_text || row.display_text || ''),
+      String(row.sender_name || ''),
+      String(row.sender_id || ''),
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+function replaceActivityChunks(db, row = {}) {
+  const text = String(row.raw_text_full || row.raw_text || row.display_text || '').trim()
+  if (!row.id || !text) return 0
+  try {
+    const oldRows = db.prepare(`
+      SELECT id FROM wechat_group_message_chunks
+      WHERE source_table = 'wechat_group_activity' AND source_id = ?
+    `).all(row.id)
+    for (const old of oldRows) deleteFtsRow(db, 'wechat_group_message_chunks_fts', old.id)
+    db.prepare(`DELETE FROM wechat_group_message_chunks WHERE source_table = 'wechat_group_activity' AND source_id = ?`).run(row.id)
+  } catch {}
+  const { size, overlap } = clampChunkConfig()
+  const chunks = splitMessageChunks(text, { size, overlap })
+  if (chunks.length <= 1 && Array.from(text).length <= size) return 0
+  let written = 0
+  const insertChunk = db.prepare(`
+    INSERT INTO wechat_group_message_chunks (
+      source_table, source_id, group_id, group_name, sender_id, sender_name,
+      chunk_index, chunk_count, chunk_text, timestamp, created_at
+    ) VALUES ('wechat_group_activity', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  let insertFts = null
+  try {
+    insertFts = db.prepare(`
+      INSERT INTO wechat_group_message_chunks_fts(rowid, chunk_text, sender_name, group_name)
+      VALUES (?, ?, ?, ?)
+    `)
+  } catch {}
+  for (const chunk of chunks) {
+    const info = insertChunk.run(
+      row.id,
+      String(row.group_id || ''),
+      String(row.group_name || ''),
+      String(row.sender_id || ''),
+      String(row.sender_name || ''),
+      chunk.index,
+      chunk.count,
+      chunk.text,
+      String(row.timestamp || nowTimestamp()),
+      String(row.created_at || nowTimestamp()),
+    )
+    try { insertFts?.run(info.lastInsertRowid, chunk.text, String(row.sender_name || ''), String(row.group_name || '')) } catch {}
+    written += 1
+  }
+  return written
+}
+
+function indexActivityRow(db, row = {}) {
+  const fts = upsertActivityFts(db, row)
+  let chunks = 0
+  try { chunks = replaceActivityChunks(db, row) } catch {}
+  return { fts, chunks }
+}
+
+function quoteFtsTerm(term = '') {
+  const value = String(term || '').trim().replace(/"/g, '""')
+  return value ? `"${value}"` : ''
+}
+
+function buildFtsMatchQuery(terms = []) {
+  return (Array.isArray(terms) ? terms : [])
+    .map(term => String(term || '').trim())
+    .filter(term => Array.from(term).length >= 3)
+    .map(quoteFtsTerm)
+    .filter(Boolean)
+    .join(' OR ')
+}
+
+function isHistoricalArchiveQuestion(query = '') {
+  return /(?:谁说|谁发|谁讲|谁提|谁是|哪个人|哪位|之前|以前|早些|上次|前天|昨天|两天前|三天前|上周|上个月|去年|上午|下午|晚上|凌晨|聊天记录|记录里|历史|记得|不记得|有没有提到|群里有没有|总结.*(?:聊天|群)|老登|大哥|叫他|称呼)/u.test(String(query || ''))
+}
+
+function rowSelectSql(prefix = '') {
+  const p = prefix ? `${prefix}.` : ''
+  return `${p}id, ${p}group_id, ${p}group_name, ${p}sender_id, ${p}sender_name, ${p}message_type, ${p}display_text, ${p}raw_text, ${p}raw_text_full,
+          ${p}image_count, ${p}emoji_count, ${p}link_count, ${p}mentioned_self, ${p}source, ${p}timestamp, ${p}created_at`
+}
+
+function safeCount(db, sql = '', params = []) {
+  try { return Number(db.prepare(sql).get(...params)?.n || 0) } catch { return 0 }
+}
 
 export function formatWeChatLocalDateTime(value = '') {
   if (!value) return ''
@@ -125,14 +260,21 @@ function extractArchiveSearchTerms(query = '') {
   const value = String(query || '').trim()
   const stop = new Set('这个 那个 什么 怎么 为啥 为什么 是否 是谁 哪个 哪里 之前 现在 当前 聊天 记录 数据 忘了 你们 我们 他们 还有 一下 说是 有没有 帮我 看看 查询 记得 不记得 知道 不知道'.split(' '))
   const terms = []
+  const addTerm = term => {
+    const clean = String(term || '').trim()
+    if (!clean || stop.has(clean) || /^\d+$/u.test(clean)) return
+    terms.push(clean)
+  }
   for (const match of value.matchAll(/[“"「『']([^”"」』']{1,24})[”"」』']/gu)) {
-    const term = match[1]?.trim()
-    if (term) terms.push(term)
+    addTerm(match[1])
   }
   // 不把开头 @ 助手账号当检索词，否则群里每条 @ 助手的消息都会命中，淹没真正关键词。
   const withoutMentions = value.replace(/[@＠][^\s\u2005\u2006\u2007\u2008\u2009\u200a，,：:、?？!！]{1,24}/gu, ' ')
   for (const token of withoutMentions.match(/[\u4e00-\u9fa5A-Za-z0-9_]{2,16}/gu) || []) {
-    if (!stop.has(token) && !/^\d+$/.test(token)) terms.push(token)
+    addTerm(token)
+    for (const part of token.split(/(?:之前|以前|早些|上次|谁说过|谁说|谁发|谁讲|谁提|说过|提到|有没有|群里|聊天|记录|这个|那个|什么|暗号|关键词|意思|是谁|是啥|是什么|哪里|哪位|哪个)/u)) {
+      if (Array.from(part).length >= 2) addTerm(part)
+    }
   }
   for (const special of ['老登', '大哥', '义父', '老板', '群主', '管理', '管理员', '向量记忆', '称呼', '外号']) {
     if (value.includes(special)) terms.push(special)
@@ -145,7 +287,7 @@ function escapeRegex(value = '') {
 }
 
 function scoreArchiveEvidenceRow(row = {}, terms = [], query = '') {
-  const text = `${row.display_text || ''}\n${row.raw_text || ''}`
+  const text = `${row.display_text || ''}\n${row.raw_text_full || ''}\n${row.raw_text || ''}`
   const sender = String(row.sender_name || '')
   let score = 0
   for (const term of terms) {
@@ -247,7 +389,7 @@ function rowWithDisplayName(row = {}, nameMap = new Map()) {
     sender_name: senderName,
     sender_display_name: senderName,
     timestamp_display: formatWeChatLocalDateTime(row.timestamp),
-    media_files: mediaMetadataFromText(`${row.raw_text || ''}\n${row.display_text || ''}`),
+    media_files: mediaMetadataFromText(`${row.raw_text_full || ''}\n${row.raw_text || ''}\n${row.display_text || ''}`),
   }
 }
 
@@ -400,12 +542,49 @@ function ensureSchema() {
       UNIQUE(group_id, digest_type, period_key)
     );
     CREATE INDEX IF NOT EXISTS idx_wechat_group_digest_sent_at ON wechat_group_digest_sent(sent_at);
+
+    CREATE TABLE IF NOT EXISTS wechat_group_message_chunks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_table TEXT NOT NULL,
+      source_id INTEGER NOT NULL,
+      group_id TEXT NOT NULL,
+      group_name TEXT NOT NULL DEFAULT '',
+      sender_id TEXT NOT NULL DEFAULT '',
+      sender_name TEXT NOT NULL DEFAULT '',
+      chunk_index INTEGER NOT NULL DEFAULT 0,
+      chunk_count INTEGER NOT NULL DEFAULT 1,
+      chunk_text TEXT NOT NULL DEFAULT '',
+      embedding BLOB,
+      timestamp TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(source_table, source_id, chunk_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_wechat_group_chunks_group_ts ON wechat_group_message_chunks(group_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_wechat_group_chunks_source ON wechat_group_message_chunks(source_table, source_id);
   `)
+  try { db.exec(`ALTER TABLE wechat_group_activity ADD COLUMN raw_text_full TEXT NOT NULL DEFAULT ''`) } catch {}
   try { db.exec(`ALTER TABLE wechat_group_member_names ADD COLUMN wechat_id TEXT NOT NULL DEFAULT ''`) } catch {}
   try { db.exec(`ALTER TABLE wechat_group_member_names ADD COLUMN wxid TEXT NOT NULL DEFAULT ''`) } catch {}
   try { db.exec(`ALTER TABLE wechat_group_member_names ADD COLUMN stable_key TEXT NOT NULL DEFAULT ''`) } catch {}
   try { db.exec(`ALTER TABLE wechat_group_member_names ADD COLUMN raw_identity TEXT NOT NULL DEFAULT ''`) } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_wechat_group_member_names_stable ON wechat_group_member_names(group_id, stable_key)`) } catch {}
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS wechat_group_activity_fts USING fts5(
+        display_text,
+        raw_text_full,
+        sender_name,
+        sender_id,
+        tokenize='trigram'
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS wechat_group_message_chunks_fts USING fts5(
+        chunk_text,
+        sender_name,
+        group_name,
+        tokenize='trigram'
+      );
+    `)
+  } catch {}
   schemaReady = true
 }
 
@@ -540,6 +719,7 @@ export function analyzeWeChatGroupMessage({ text = '', messageType = '' } = {}) 
     sourceType: type || '',
     displayText,
     rawText: rawText.slice(0, MAX_TEXT_LENGTH),
+    rawTextFull: rawText,
     textLength,
     imageCount,
     emojiCount,
@@ -563,9 +743,9 @@ export function recordWeChatGroupActivity({ groupId, groupName = '', senderId = 
   const db = getDB()
   const info = db.prepare(`
     INSERT INTO wechat_group_activity (
-      group_id, group_name, sender_id, sender_name, message_type, display_text, raw_text,
+      group_id, group_name, sender_id, sender_name, message_type, display_text, raw_text, raw_text_full,
       text_length, image_count, emoji_count, link_count, brag_score, mentioned_self, source, timestamp
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     gid,
     String(groupName || '').trim(),
@@ -574,6 +754,7 @@ export function recordWeChatGroupActivity({ groupId, groupName = '', senderId = 
     analysis.messageType,
     analysis.displayText,
     analysis.rawText,
+    analysis.rawTextFull,
     analysis.textLength,
     analysis.imageCount,
     analysis.emojiCount,
@@ -583,7 +764,18 @@ export function recordWeChatGroupActivity({ groupId, groupName = '', senderId = 
     String(source || '').trim(),
     String(timestamp || nowTimestamp())
   )
-  return { ok: true, id: info.lastInsertRowid, group_id: gid, ...analysis }
+  const indexed = indexActivityRow(db, {
+    id: info.lastInsertRowid,
+    group_id: gid,
+    group_name: String(groupName || '').trim(),
+    sender_id: String(senderId || '').trim(),
+    sender_name: pickWeChatDisplayName([senderName], senderId),
+    display_text: analysis.displayText,
+    raw_text: analysis.rawText,
+    raw_text_full: analysis.rawTextFull,
+    timestamp: String(timestamp || nowTimestamp()),
+  })
+  return { ok: true, id: info.lastInsertRowid, group_id: gid, indexed, ...analysis }
 }
 
 export function updateWeChatGroupActivitySenderName({ groupId, groupName = '', senderId = '', senderName = '' } = {}) {
@@ -946,9 +1138,101 @@ export function getWeChatGroupStats({ groupId, groupName = '', from = '', to = '
   }
 }
 
+function fetchArchiveChunkMatches({ db, gid, groupName = '', terms = [], ftsQuery = '', from = '', limit = 120 } = {}) {
+  const groupFilter = groupWhereClause(gid, groupName, 'c')
+  const timeSql = from ? 'AND c.timestamp >= ?' : ''
+  const timeParams = from ? [from] : []
+  if (ftsQuery) {
+    try {
+      const rows = db.prepare(`
+        SELECT c.id AS chunk_id, c.chunk_index, c.chunk_count, c.chunk_text AS matched_chunk_text,
+               a.id, a.group_id, a.group_name, a.sender_id, a.sender_name, a.message_type,
+               a.display_text, a.raw_text, a.raw_text_full, a.image_count, a.emoji_count,
+               a.link_count, a.mentioned_self, a.source, a.timestamp, a.created_at,
+               bm25(wechat_group_message_chunks_fts) AS rank_score
+        FROM wechat_group_message_chunks c
+        JOIN wechat_group_message_chunks_fts ON wechat_group_message_chunks_fts.rowid = c.id
+        JOIN wechat_group_activity a ON a.id = c.source_id AND c.source_table = 'wechat_group_activity'
+        WHERE wechat_group_message_chunks_fts MATCH ?
+          AND ${groupFilter.sql}
+          ${timeSql}
+        ORDER BY bm25(wechat_group_message_chunks_fts), c.timestamp DESC
+        LIMIT ?
+      `).all(ftsQuery, ...groupFilter.params, ...timeParams, limit)
+      if (rows.length) return rows
+    } catch {}
+  }
+  if (!terms.length) return []
+  const termWhere = terms.map(() => '(c.chunk_text LIKE ? OR c.sender_name LIKE ? OR c.group_name LIKE ?)').join(' OR ')
+  const params = [...groupFilter.params, ...timeParams]
+  for (const term of terms) {
+    const like = `%${term}%`
+    params.push(like, like, like)
+  }
+  try {
+    return db.prepare(`
+      SELECT c.id AS chunk_id, c.chunk_index, c.chunk_count, c.chunk_text AS matched_chunk_text,
+             a.id, a.group_id, a.group_name, a.sender_id, a.sender_name, a.message_type,
+             a.display_text, a.raw_text, a.raw_text_full, a.image_count, a.emoji_count,
+             a.link_count, a.mentioned_self, a.source, a.timestamp, a.created_at
+      FROM wechat_group_message_chunks c
+      JOIN wechat_group_activity a ON a.id = c.source_id AND c.source_table = 'wechat_group_activity'
+      WHERE ${groupFilter.sql}
+        ${timeSql}
+        AND (${termWhere})
+      ORDER BY c.id DESC
+      LIMIT ?
+    `).all(...params, limit)
+  } catch {
+    return []
+  }
+}
+
+function fetchArchiveActivityMatches({ db, gid, groupName = '', terms = [], ftsQuery = '', from = '', limit = 120 } = {}) {
+  const groupFilter = groupWhereClause(gid, groupName, 'a')
+  const timeSql = from ? 'AND a.timestamp >= ?' : ''
+  const timeParams = from ? [from] : []
+  if (ftsQuery) {
+    try {
+      const rows = db.prepare(`
+        SELECT ${rowSelectSql('a')}, bm25(wechat_group_activity_fts) AS rank_score
+        FROM wechat_group_activity a
+        JOIN wechat_group_activity_fts ON wechat_group_activity_fts.rowid = a.id
+        WHERE wechat_group_activity_fts MATCH ?
+          AND ${groupFilter.sql}
+          ${timeSql}
+        ORDER BY bm25(wechat_group_activity_fts), a.timestamp DESC
+        LIMIT ?
+      `).all(ftsQuery, ...groupFilter.params, ...timeParams, limit)
+      if (rows.length) return rows
+    } catch {}
+  }
+  if (!terms.length) return []
+  const termWhere = terms.map(() => '(a.display_text LIKE ? OR a.raw_text LIKE ? OR a.raw_text_full LIKE ? OR a.sender_name LIKE ? OR a.sender_id LIKE ?)').join(' OR ')
+  const params = [...groupFilter.params, ...timeParams]
+  for (const term of terms) {
+    const like = `%${term}%`
+    params.push(like, like, like, like, like)
+  }
+  try {
+    return db.prepare(`
+      SELECT ${rowSelectSql('a')}
+      FROM wechat_group_activity a
+      WHERE ${groupFilter.sql}
+        ${timeSql}
+        AND (${termWhere})
+      ORDER BY a.id DESC
+      LIMIT ?
+    `).all(...params, limit)
+  } catch {
+    return []
+  }
+}
+
 export function getWeChatGroupArchiveEvidence({ groupId, groupName = '', query = '', limit = 36, recentLimit = 12, days = 30 } = {}) {
   const gid = normalizeStatsGroupId(groupId)
   if (!gid) return { ok: false, error: 'group_id required', text: '' }
+  const startedAt = Date.now()
   ensureSchema()
   const db = getDB()
   const resolvedGroupName = resolveQueryGroupName(db, gid, groupName)
@@ -956,25 +1240,19 @@ export function getWeChatGroupArchiveEvidence({ groupId, groupName = '', query =
   const nameMap = getMemberDisplayNameMap(db, gid, resolvedGroupName)
   const safeLimit = Math.min(Math.max(Number(limit || 36), 6), 80)
   const safeRecentLimit = Math.min(Math.max(Number(recentLimit || 12), 0), 40)
-  const from = toLocalTimestamp(new Date(Date.now() - Math.min(Math.max(Number(days || 30), 1), 365) * 24 * 3600 * 1000))
+  const historyQuestion = isHistoricalArchiveQuestion(query)
+  const from = historyQuestion ? '' : toLocalTimestamp(new Date(Date.now() - Math.min(Math.max(Number(days || 30), 1), 365) * 24 * 3600 * 1000))
   const terms = extractArchiveSearchTerms(query)
+  const ftsQuery = buildFtsMatchQuery(terms)
   const seen = new Set()
   const matched = []
   if (terms.length) {
-    const termWhere = terms.map(() => '(display_text LIKE ? OR raw_text LIKE ? OR sender_name LIKE ? OR sender_id LIKE ?)').join(' OR ')
-    const params = [...groupFilter.params, from]
-    for (const term of terms) {
-      const like = `%${term}%`
-      params.push(like, like, like, like)
-    }
-    const rows = db.prepare(`
-      SELECT id, group_id, group_name, sender_id, sender_name, message_type, display_text, raw_text,
-             image_count, emoji_count, link_count, mentioned_self, source, timestamp, created_at
-      FROM wechat_group_activity
-      WHERE ${groupFilter.sql} AND timestamp >= ? AND (${termWhere})
-      ORDER BY id DESC
-      LIMIT ?
-    `).all(...params, Math.max(safeLimit * 6, 120))
+    const rows = [
+      ...fetchArchiveChunkMatches({ db, gid, groupName: resolvedGroupName, terms, ftsQuery, from, limit: Math.max(safeLimit * 4, 120) })
+        .map(row => ({ ...row, source_type: 'chunk' })),
+      ...fetchArchiveActivityMatches({ db, gid, groupName: resolvedGroupName, terms, ftsQuery, from, limit: Math.max(safeLimit * 6, 120) })
+        .map(row => ({ ...row, source_type: 'activity' })),
+    ]
     const ranked = rows
       .map(row => ({ row, score: scoreArchiveEvidenceRow(row, terms, query) }))
       .sort((a, b) => b.score - a.score || Number(b.row.id || 0) - Number(a.row.id || 0))
@@ -988,7 +1266,7 @@ export function getWeChatGroupArchiveEvidence({ groupId, groupName = '', query =
     }
   }
   const recent = safeRecentLimit > 0 ? db.prepare(`
-    SELECT id, group_id, group_name, sender_id, sender_name, message_type, display_text, raw_text,
+    SELECT id, group_id, group_name, sender_id, sender_name, message_type, display_text, raw_text, raw_text_full,
            image_count, emoji_count, link_count, mentioned_self, source, timestamp, created_at
     FROM wechat_group_activity
     WHERE ${groupFilter.sql}
@@ -1008,18 +1286,103 @@ export function getWeChatGroupArchiveEvidence({ groupId, groupName = '', query =
       row.emoji_count ? `表${row.emoji_count}` : '',
       row.link_count ? `链${row.link_count}` : '',
     ].filter(Boolean).join('/')
-    return `${row.timestamp_display || formatWeChatLocalDateTime(row.timestamp)} ${row.sender_display_name || row.sender_name || row.sender_id || '未知成员'}: ${row.display_text || row.raw_text || ''}${media ? `（${media}）` : ''}`
+    const chunkMark = row.matched_chunk_text ? `片段 ${Number(row.chunk_index || 0) + 1}/${row.chunk_count || '?'}: ` : ''
+    const body = row.matched_chunk_text || row.display_text || row.raw_text || ''
+    return `${row.timestamp_display || formatWeChatLocalDateTime(row.timestamp)} ${row.sender_display_name || row.sender_name || row.sender_id || '未知成员'}: ${chunkMark}${body}${media ? `（${media}）` : ''}`
   })
+  lastArchiveRetrievalMs = Date.now() - startedAt
   return {
     ok: true,
     group_id: gid,
     group_name: resolvedGroupName,
     terms,
+    fts_query: ftsQuery,
+    full_history: historyQuestion,
+    retrieval_ms: lastArchiveRetrievalMs,
     count: rows.length,
     matched_count: matched.length,
     recent_count: recent.length,
     records: rows,
     text: lines.join('\n'),
+  }
+}
+
+export function getWeChatGroupMemoryIndexStatus() {
+  ensureSchema()
+  const db = getDB()
+  const { size, overlap } = clampChunkConfig()
+  const activityCount = safeCount(db, `SELECT COUNT(*) AS n FROM wechat_group_activity`)
+  const activityFtsCount = safeCount(db, `SELECT COUNT(*) AS n FROM wechat_group_activity_fts`)
+  const chunkCount = safeCount(db, `SELECT COUNT(*) AS n FROM wechat_group_message_chunks`)
+  const chunkFtsCount = safeCount(db, `SELECT COUNT(*) AS n FROM wechat_group_message_chunks_fts`)
+  const rawFullPending = safeCount(db, `SELECT COUNT(*) AS n FROM wechat_group_activity WHERE COALESCE(raw_text_full, '') = '' AND COALESCE(raw_text, '') <> ''`)
+  const longPending = safeCount(db, `
+    SELECT COUNT(*) AS n
+    FROM wechat_group_activity a
+    WHERE LENGTH(COALESCE(NULLIF(a.raw_text_full, ''), a.raw_text, a.display_text, '')) > ?
+      AND NOT EXISTS (
+        SELECT 1 FROM wechat_group_message_chunks c
+        WHERE c.source_table = 'wechat_group_activity' AND c.source_id = a.id
+      )
+  `, [size])
+  return {
+    ok: true,
+    fts_available: activityFtsCount >= 0 && chunkFtsCount >= 0,
+    activity_count: activityCount,
+    activity_fts_count: activityFtsCount,
+    chunk_count: chunkCount,
+    chunk_fts_count: chunkFtsCount,
+    pending_activity_fts: Math.max(0, activityCount - activityFtsCount),
+    pending_raw_text_full: rawFullPending,
+    pending_long_message_chunks: longPending,
+    pending_chunk_fts: Math.max(0, chunkCount - chunkFtsCount),
+    chunk_size: size,
+    chunk_overlap: overlap,
+    last_retrieval_ms: lastArchiveRetrievalMs,
+    db_path: paths.dbFile,
+  }
+}
+
+export function backfillWeChatGroupMemoryIndex({ limit = 5000 } = {}) {
+  ensureSchema()
+  const db = getDB()
+  const max = Math.min(Math.max(Number(limit || 5000), 1), 50000)
+  const rows = db.prepare(`
+    SELECT ${rowSelectSql('a')}
+    FROM wechat_group_activity a
+    ORDER BY a.id ASC
+    LIMIT ?
+  `).all(max)
+  let scanned = 0
+  let activityFts = 0
+  let chunks = 0
+  let rawTextFullUpdated = 0
+  const errors = []
+  for (const row of rows) {
+    scanned += 1
+    const full = String(row.raw_text_full || row.raw_text || row.display_text || '').trim()
+    try {
+      if (!row.raw_text_full && full) {
+        db.prepare(`UPDATE wechat_group_activity SET raw_text_full = ? WHERE id = ?`).run(full, row.id)
+        row.raw_text_full = full
+        rawTextFullUpdated += 1
+      }
+      const indexed = indexActivityRow(db, row)
+      if (indexed.fts) activityFts += 1
+      chunks += Number(indexed.chunks || 0)
+    } catch (err) {
+      errors.push(`${row.id}: ${err?.message || err}`)
+      if (errors.length >= 20) break
+    }
+  }
+  return {
+    ok: errors.length === 0,
+    scanned,
+    activity_fts: activityFts,
+    chunks,
+    raw_text_full_updated: rawTextFullUpdated,
+    errors,
+    status: getWeChatGroupMemoryIndexStatus(),
   }
 }
 
@@ -1041,9 +1404,9 @@ export function listWeChatGroupActivityRecords({ groupId, groupName = '', from =
   const filters = [groupFilter.sql, 'timestamp >= ?', 'timestamp <= ?']
   const params = [...groupFilter.params, dates.from, dates.to]
   if (query) {
-    filters.push('(display_text LIKE ? OR raw_text LIKE ? OR sender_name LIKE ? OR sender_id LIKE ?)')
+    filters.push('(display_text LIKE ? OR raw_text LIKE ? OR raw_text_full LIKE ? OR sender_name LIKE ? OR sender_id LIKE ?)')
     const like = `%${query}%`
-    params.push(like, like, like, like)
+    params.push(like, like, like, like, like)
   }
   if (messageType) {
     if (messageType === 'image') filters.push('image_count > 0')
@@ -1077,7 +1440,7 @@ export function listWeChatGroupActivityRecords({ groupId, groupName = '', from =
     LIMIT 1
   `).get(...groupFilter.params) || null
   const rows = db.prepare(`
-    SELECT id, group_id, group_name, sender_id, sender_name, message_type, display_text, raw_text,
+    SELECT id, group_id, group_name, sender_id, sender_name, message_type, display_text, raw_text, raw_text_full,
            text_length, image_count, emoji_count, link_count, brag_score, mentioned_self, source, timestamp, created_at
     FROM wechat_group_activity
     WHERE ${where}

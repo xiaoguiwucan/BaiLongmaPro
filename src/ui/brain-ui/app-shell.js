@@ -473,6 +473,56 @@ const createSettingsModal = () => `
             <div class="db-overview-grid" id="db-overview-grid">
               <div class="wechaty-empty">正在加载数据库统计…</div>
             </div>
+            <div class="db-archive-panel">
+              <div class="wechaty-subsection-head">
+                <div>
+                  <div class="wechaty-subsection-title">聊天记录与图片解析范围</div>
+                  <p class="settings-hint compact">自由回复群默认纳入有效记录范围；历史旧数据保留。</p>
+                </div>
+                <div class="db-image-actions">
+                  <button class="settings-save-btn ghost" id="db-archive-sync-free-btn" type="button">同步自由回复群</button>
+                  <button class="settings-save-btn primary" id="db-archive-save-record-btn" type="button">保存记录群</button>
+                  <button class="settings-save-btn" id="db-archive-save-image-btn" type="button">保存图片解析群</button>
+                </div>
+              </div>
+              <div class="db-archive-controls">
+                <label class="db-archive-toggle"><span>启用记录范围</span><span class="settings-toggle"><input id="db-archive-enabled" type="checkbox"><span class="settings-toggle-track"></span></span></label>
+                <label class="db-archive-toggle"><span>记录聊天内容</span><span class="settings-toggle"><input id="db-archive-record-text" type="checkbox"><span class="settings-toggle-track"></span></span></label>
+                <label class="db-archive-toggle"><span>保存媒体文件</span><span class="settings-toggle"><input id="db-archive-record-media" type="checkbox"><span class="settings-toggle-track"></span></span></label>
+                <label class="db-archive-toggle"><span>解析图片内容</span><span class="settings-toggle"><input id="db-archive-parse-images" type="checkbox"><span class="settings-toggle-track"></span></span></label>
+                <label class="db-archive-toggle"><span>自由回复群自动纳入</span><span class="settings-toggle"><input id="db-archive-default-free" type="checkbox"><span class="settings-toggle-track"></span></span></label>
+              </div>
+              <div class="db-archive-grid">
+                <label>搜索群
+                  <input class="settings-input" id="db-archive-search" placeholder="输入群名筛选">
+                </label>
+                <label>长消息分块大小
+                  <input class="settings-input" id="db-archive-chunk-size" type="number" min="500" max="8000" step="100">
+                </label>
+                <label>分块重叠
+                  <input class="settings-input" id="db-archive-chunk-overlap" type="number" min="0" max="1000" step="20">
+                </label>
+              </div>
+              <div class="db-archive-summary" id="db-archive-summary">正在读取记录范围…</div>
+              <div class="db-archive-group-list" id="db-archive-group-list">
+                <div class="wechaty-empty">正在加载群组…</div>
+              </div>
+            </div>
+            <div class="db-index-panel">
+              <div class="wechaty-subsection-head">
+                <div>
+                  <div class="wechaty-subsection-title">长期记忆索引状态</div>
+                  <p class="settings-hint compact">FTS、长消息 chunk、本地记忆和 embedding 补齐进度。</p>
+                </div>
+                <div class="db-image-actions">
+                  <button class="settings-save-btn ghost" id="db-index-refresh-btn" type="button">刷新索引</button>
+                  <button class="settings-save-btn primary" id="db-index-backfill-btn" type="button">开始补齐长期记忆索引</button>
+                </div>
+              </div>
+              <div class="db-index-grid" id="db-index-grid">
+                <div class="wechaty-empty">正在读取长期记忆索引状态…</div>
+              </div>
+            </div>
             <div class="db-image-panel">
               <div class="wechaty-subsection-head">
                 <div>

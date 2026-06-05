@@ -1372,6 +1372,18 @@ const DEFAULT_WECHATY_ACTIVE_REPLY = {
   minIntervalSeconds: 60,
 }
 
+export const DEFAULT_WECHAT_GROUP_ARCHIVE_CONFIG = {
+  enabled: true,
+  recordGroupNames: [],
+  parseImageGroupNames: [],
+  defaultFromFreeReplyGroups: true,
+  recordText: true,
+  recordMedia: true,
+  parseImages: true,
+  longMessageChunkSize: 1800,
+  longMessageChunkOverlap: 160,
+}
+
 function normalizeWechatyOfflineQrNotify(value = {}) {
   const raw = value && typeof value === 'object' ? value : {}
   const cooldown = Number(raw.cooldownMinutes ?? raw.cooldown_minutes)
@@ -1391,6 +1403,35 @@ function normalizeWechatyActiveReply(value = {}) {
     minIntervalSeconds: Number.isFinite(minInterval)
       ? Math.min(3600, Math.max(10, Math.round(minInterval)))
       : DEFAULT_WECHATY_ACTIVE_REPLY.minIntervalSeconds,
+  }
+}
+
+function normalizeWechatGroupArchiveConfig(value = {}, { freeReplyGroups = [] } = {}) {
+  const raw = value && typeof value === 'object' ? value : {}
+  const recordGroupNames = normalizeStringArray(raw.recordGroupNames ?? raw.record_group_names ?? raw.recordGroups ?? raw.record_groups ?? [])
+  const parseImageGroupNames = normalizeStringArray(raw.parseImageGroupNames ?? raw.parse_image_group_names ?? raw.imageGroupNames ?? raw.image_group_names ?? [])
+  const freeGroups = normalizeStringArray(freeReplyGroups)
+  const defaultFromFreeReplyGroups = raw.defaultFromFreeReplyGroups !== false && raw.default_from_free_reply_groups !== false
+  const chunkSize = Number(raw.longMessageChunkSize ?? raw.long_message_chunk_size)
+  const overlap = Number(raw.longMessageChunkOverlap ?? raw.long_message_chunk_overlap)
+  const effectiveRecordGroupNames = defaultFromFreeReplyGroups
+    ? [...new Set([...recordGroupNames, ...freeGroups])]
+    : [...recordGroupNames]
+  const effectiveParseImageGroupNames = defaultFromFreeReplyGroups
+    ? [...new Set([...parseImageGroupNames, ...freeGroups])]
+    : [...parseImageGroupNames]
+  return {
+    enabled: raw.enabled !== false,
+    recordGroupNames,
+    parseImageGroupNames,
+    defaultFromFreeReplyGroups,
+    recordText: raw.recordText !== false && raw.record_text !== false,
+    recordMedia: raw.recordMedia !== false && raw.record_media !== false,
+    parseImages: raw.parseImages !== false && raw.parse_images !== false,
+    longMessageChunkSize: Number.isFinite(chunkSize) ? Math.min(8000, Math.max(500, Math.round(chunkSize))) : DEFAULT_WECHAT_GROUP_ARCHIVE_CONFIG.longMessageChunkSize,
+    longMessageChunkOverlap: Number.isFinite(overlap) ? Math.min(1000, Math.max(0, Math.round(overlap))) : DEFAULT_WECHAT_GROUP_ARCHIVE_CONFIG.longMessageChunkOverlap,
+    effectiveRecordGroupNames,
+    effectiveParseImageGroupNames,
   }
 }
 
@@ -1494,6 +1535,53 @@ export function setWechatyDutyGroupConfig(updates = {}) {
   const social = { ...(existing.social || {}), wechatyDutyGroup: next }
   writeStoredConfig({ ...existing, social })
   return getWechatyDutyGroupConfig()
+}
+
+export function getWeChatGroupArchiveConfig() {
+  let stored = {}
+  let freeReplyGroups = []
+  try {
+    const social = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.social || {}
+    stored = social.wechatGroupArchive || social.wechat_group_archive || {}
+    const rawNames = social.wechatyDutyGroup?.groupNames || social.wechatyDutyGroup?.group_names || []
+    freeReplyGroups = Array.isArray(rawNames) ? rawNames : []
+  } catch {}
+  return normalizeWechatGroupArchiveConfig(stored, { freeReplyGroups })
+}
+
+export function setWeChatGroupArchiveConfig(updates = {}) {
+  let existing = {}
+  try { existing = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8')) } catch {}
+  const current = existing.social?.wechatGroupArchive || existing.social?.wechat_group_archive || {}
+  const next = { ...current }
+  if (Object.prototype.hasOwnProperty.call(updates, 'enabled')) next.enabled = updates.enabled !== false
+  if (Object.prototype.hasOwnProperty.call(updates, 'recordGroupNames') || Object.prototype.hasOwnProperty.call(updates, 'record_group_names')) {
+    next.recordGroupNames = normalizeStringArray(updates.recordGroupNames ?? updates.record_group_names)
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'parseImageGroupNames') || Object.prototype.hasOwnProperty.call(updates, 'parse_image_group_names')) {
+    next.parseImageGroupNames = normalizeStringArray(updates.parseImageGroupNames ?? updates.parse_image_group_names)
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'defaultFromFreeReplyGroups') || Object.prototype.hasOwnProperty.call(updates, 'default_from_free_reply_groups')) {
+    next.defaultFromFreeReplyGroups = (updates.defaultFromFreeReplyGroups ?? updates.default_from_free_reply_groups) !== false
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'recordText') || Object.prototype.hasOwnProperty.call(updates, 'record_text')) {
+    next.recordText = (updates.recordText ?? updates.record_text) !== false
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'recordMedia') || Object.prototype.hasOwnProperty.call(updates, 'record_media')) {
+    next.recordMedia = (updates.recordMedia ?? updates.record_media) !== false
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'parseImages') || Object.prototype.hasOwnProperty.call(updates, 'parse_images')) {
+    next.parseImages = (updates.parseImages ?? updates.parse_images) !== false
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'longMessageChunkSize') || Object.prototype.hasOwnProperty.call(updates, 'long_message_chunk_size')) {
+    next.longMessageChunkSize = updates.longMessageChunkSize ?? updates.long_message_chunk_size
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'longMessageChunkOverlap') || Object.prototype.hasOwnProperty.call(updates, 'long_message_chunk_overlap')) {
+    next.longMessageChunkOverlap = updates.longMessageChunkOverlap ?? updates.long_message_chunk_overlap
+  }
+  const social = { ...(existing.social || {}), wechatGroupArchive: next }
+  writeStoredConfig({ ...existing, social })
+  return getWeChatGroupArchiveConfig()
 }
 
 export function setWechatyDutyGroupRuntime(runtime = {}) {

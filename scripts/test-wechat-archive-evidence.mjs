@@ -37,6 +37,17 @@ recordWeChatGroupActivity({
   timestamp: '2026-05-28T10:01:00+08:00',
   force: true,
 })
+const longTail = '前半段只是在铺垫。'.repeat(460) + '后半段唯一暗号是海盐牛奶，答案藏在这里。'
+recordWeChatGroupActivity({
+  groupId,
+  groupName,
+  senderId: '@long',
+  senderName: '长消息同学',
+  text: longTail,
+  source: 'test',
+  timestamp: '2026-05-28T10:02:00+08:00',
+  force: true,
+})
 
 const evidence = getWeChatGroupArchiveEvidence({
   groupId,
@@ -52,6 +63,19 @@ assert.ok(evidence.terms.includes('老登'))
 assert.ok(evidence.text.includes('风的季节'))
 assert.ok(evidence.text.includes('老登就是东北话里的老头儿'))
 assert.ok(evidence.matched_count >= 1)
+
+const chunkEvidence = getWeChatGroupArchiveEvidence({
+  groupId,
+  groupName,
+  query: '之前谁说过海盐牛奶这个暗号？',
+  limit: 8,
+  recentLimit: 0,
+  days: 180,
+})
+assert.equal(chunkEvidence.ok, true)
+assert.ok(chunkEvidence.matched_count >= 1)
+assert.ok(chunkEvidence.text.includes('海盐牛奶'))
+assert.ok(chunkEvidence.text.includes('片段'))
 
 const prompt = await buildWeChatGroupCommandPrompt({
   groupId,

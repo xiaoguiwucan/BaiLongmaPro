@@ -2300,6 +2300,22 @@ function initTTSSettings() {
   const dbSearchInput = document.getElementById("db-search-input");
   const dbSearchBtn = document.getElementById("db-search-btn");
   const dbSearchResults = document.getElementById("db-search-results");
+  const dbArchiveEnabled = document.getElementById("db-archive-enabled");
+  const dbArchiveRecordText = document.getElementById("db-archive-record-text");
+  const dbArchiveRecordMedia = document.getElementById("db-archive-record-media");
+  const dbArchiveParseImages = document.getElementById("db-archive-parse-images");
+  const dbArchiveDefaultFree = document.getElementById("db-archive-default-free");
+  const dbArchiveSearch = document.getElementById("db-archive-search");
+  const dbArchiveChunkSize = document.getElementById("db-archive-chunk-size");
+  const dbArchiveChunkOverlap = document.getElementById("db-archive-chunk-overlap");
+  const dbArchiveSummary = document.getElementById("db-archive-summary");
+  const dbArchiveGroupList = document.getElementById("db-archive-group-list");
+  const dbArchiveSyncFreeBtn = document.getElementById("db-archive-sync-free-btn");
+  const dbArchiveSaveRecordBtn = document.getElementById("db-archive-save-record-btn");
+  const dbArchiveSaveImageBtn = document.getElementById("db-archive-save-image-btn");
+  const dbIndexGrid = document.getElementById("db-index-grid");
+  const dbIndexRefreshBtn = document.getElementById("db-index-refresh-btn");
+  const dbIndexBackfillBtn = document.getElementById("db-index-backfill-btn");
   const dbImageGroup = document.getElementById("db-image-group");
   const dbImageStatus = document.getElementById("db-image-status");
   const dbImageQuery = document.getElementById("db-image-query");
@@ -2352,6 +2368,20 @@ function initTTSSettings() {
   let cachedLLMMonitorStatus = {};
   let cachedLLMMonitorRooms = [];
   let llmMonitorMentionCache = {};
+  let wechatGroupArchiveConfigCache = {
+    enabled: true,
+    recordGroupNames: [],
+    parseImageGroupNames: [],
+    defaultFromFreeReplyGroups: true,
+    recordText: true,
+    recordMedia: true,
+    parseImages: true,
+    longMessageChunkSize: 1800,
+    longMessageChunkOverlap: 160,
+  };
+  let dbArchiveRecordNames = new Set();
+  let dbArchiveImageNames = new Set();
+  let dbArchiveFreeNames = new Set();
   let dbImageOffset = 0;
   let dbImageHasMore = false;
   let dbImageAutoRefreshTimer = null;
@@ -3047,9 +3077,10 @@ function initTTSSettings() {
 
   async function loadSocialSettings() {
     try {
-      const { social, wechatyDutyGroup, wechatyDutyGroupStatus, wechatyPersonaPresets: personaPresets, honcho, honchoStatus: honchoRuntime, wechatGroupDigest, wechatMeme, guardRules } = await fetch(`${API}/settings/social`).then(r => r.json());
+      const { social, wechatyDutyGroup, wechatyDutyGroupStatus, wechatyPersonaPresets: personaPresets, honcho, honchoStatus: honchoRuntime, wechatGroupArchive, wechatGroupDigest, wechatMeme, guardRules } = await fetch(`${API}/settings/social`).then(r => r.json());
       renderWechatyPersonaPresets(personaPresets || [], wechatyDutyGroup?.personaPrompt || "");
       applyWechatyDutyConfig(wechatyDutyGroup, wechatyDutyGroupStatus);
+      applyWechatGroupArchiveConfig(wechatGroupArchive || {}, wechatyDutyGroup || {});
       applyHonchoConfig(honcho, honchoRuntime);
       applyWechatyDigestConfig(wechatGroupDigest || {});
       applyWechatyMemeConfig(wechatMeme || {});
@@ -4334,6 +4365,201 @@ function initTTSSettings() {
     return `${n >= 10 || idx === 0 ? n.toFixed(0) : n.toFixed(1)} ${units[idx]}`;
   }
 
+  function normalizeUiStringArray(input) {
+    if (input instanceof Set) return [...input].map(v => String(v || "").trim()).filter(Boolean);
+    const raw = Array.isArray(input)
+      ? input
+      : String(input || "").split(/[，,;；\n\r]+/u);
+    return [...new Set(raw.map(v => String(v || "").trim()).filter(Boolean))];
+  }
+
+  function applyWechatGroupArchiveConfig(config = {}, dutyConfig = {}) {
+    wechatGroupArchiveConfigCache = {
+      ...wechatGroupArchiveConfigCache,
+      ...(config && typeof config === "object" ? config : {}),
+    };
+    dbArchiveRecordNames = new Set(normalizeUiStringArray(wechatGroupArchiveConfigCache.recordGroupNames || wechatGroupArchiveConfigCache.record_group_names));
+    dbArchiveImageNames = new Set(normalizeUiStringArray(wechatGroupArchiveConfigCache.parseImageGroupNames || wechatGroupArchiveConfigCache.parse_image_group_names));
+    dbArchiveFreeNames = new Set(normalizeUiStringArray(dutyConfig?.groupNames || dutyConfig?.group_names || wechatyConfiguredGroupNames));
+    if (dbArchiveEnabled) dbArchiveEnabled.checked = wechatGroupArchiveConfigCache.enabled !== false;
+    if (dbArchiveRecordText) dbArchiveRecordText.checked = wechatGroupArchiveConfigCache.recordText !== false && wechatGroupArchiveConfigCache.record_text !== false;
+    if (dbArchiveRecordMedia) dbArchiveRecordMedia.checked = wechatGroupArchiveConfigCache.recordMedia !== false && wechatGroupArchiveConfigCache.record_media !== false;
+    if (dbArchiveParseImages) dbArchiveParseImages.checked = wechatGroupArchiveConfigCache.parseImages !== false && wechatGroupArchiveConfigCache.parse_images !== false;
+    if (dbArchiveDefaultFree) dbArchiveDefaultFree.checked = wechatGroupArchiveConfigCache.defaultFromFreeReplyGroups !== false && wechatGroupArchiveConfigCache.default_from_free_reply_groups !== false;
+    if (dbArchiveChunkSize) dbArchiveChunkSize.value = String(wechatGroupArchiveConfigCache.longMessageChunkSize || wechatGroupArchiveConfigCache.long_message_chunk_size || 1800);
+    if (dbArchiveChunkOverlap) dbArchiveChunkOverlap.value = String(wechatGroupArchiveConfigCache.longMessageChunkOverlap || wechatGroupArchiveConfigCache.long_message_chunk_overlap || 160);
+    renderDbArchiveGroups();
+  }
+
+  function getDbArchiveCandidateGroups() {
+    const map = new Map();
+    const add = (name = "", meta = {}) => {
+      const topic = String(name || "").trim();
+      if (!topic) return;
+      const key = topic.replace(/\s+/gu, " ").toLowerCase();
+      const prev = map.get(key) || {};
+      map.set(key, {
+        name: topic,
+        id: meta.id || prev.id || "",
+        message_count: Math.max(Number(prev.message_count || 0), Number(meta.message_count || 0)),
+        member_count: Math.max(Number(prev.member_count || 0), Number(meta.member_count || 0)),
+        last_seen_display: meta.last_seen_display || prev.last_seen_display || "",
+        selected_reply: prev.selected_reply || meta.selected_reply === true,
+        configured_record: prev.configured_record || meta.configured_record === true,
+        configured_image: prev.configured_image || meta.configured_image === true,
+      });
+    };
+    for (const group of mergeWechatyKnownGroups()) {
+      add(group.topic || group.group_name || group.id, {
+        id: group.id || group.group_id || "",
+        message_count: group.message_count,
+        member_count: group.member_count,
+        last_seen_display: group.last_seen_display,
+        selected_reply: wechatyConfiguredGroupNames.has(group.topic),
+      });
+    }
+    for (const name of dbArchiveRecordNames) add(name, { configured_record: true });
+    for (const name of dbArchiveImageNames) add(name, { configured_image: true });
+    for (const name of dbArchiveFreeNames) add(name, { selected_reply: true });
+    return [...map.values()].sort((a, b) =>
+      Number(dbArchiveRecordNames.has(b.name) || dbArchiveImageNames.has(b.name) || dbArchiveFreeNames.has(b.name))
+      - Number(dbArchiveRecordNames.has(a.name) || dbArchiveImageNames.has(a.name) || dbArchiveFreeNames.has(a.name))
+      || String(a.name).localeCompare(String(b.name), "zh-Hans-CN"));
+  }
+
+  function renderDbArchiveGroups() {
+    if (!dbArchiveGroupList) return;
+    const keyword = String(dbArchiveSearch?.value || "").trim().toLowerCase();
+    const includeFree = dbArchiveDefaultFree?.checked !== false;
+    const groups = getDbArchiveCandidateGroups().filter(group => !keyword || group.name.toLowerCase().includes(keyword));
+    if (!groups.length) {
+      dbArchiveGroupList.innerHTML = '<div class="wechaty-empty">暂无可选群。微信助手登录后会自动刷新真实群列表。</div>';
+      updateDbArchiveSummary();
+      return;
+    }
+    dbArchiveGroupList.innerHTML = groups.map(group => {
+      const name = String(group.name || "");
+      const isFree = dbArchiveFreeNames.has(name);
+      const recordChecked = dbArchiveRecordNames.has(name) || (includeFree && isFree);
+      const imageChecked = dbArchiveImageNames.has(name) || (includeFree && isFree);
+      const badges = [
+        isFree ? "自由回复" : "",
+        group.configured_record ? "记录配置" : "",
+        group.configured_image ? "图片配置" : "",
+        group.message_count ? `${group.message_count} 条` : "",
+      ].filter(Boolean);
+      return `<div class="db-archive-group-row${isFree ? " free" : ""}">
+        <div class="db-archive-group-main">
+          <b>${escapeHtml(name)}</b>
+          <span>${escapeHtml(group.id || group.last_seen_display || "已识别群组")}</span>
+        </div>
+        <div class="db-archive-group-badges">${badges.map(label => `<em>${escapeHtml(label)}</em>`).join("")}</div>
+        <label><input type="checkbox" data-archive-kind="record" value="${escapeHtml(name)}"${recordChecked ? " checked" : ""}${includeFree && isFree ? " disabled" : ""}>记录</label>
+        <label><input type="checkbox" data-archive-kind="image" value="${escapeHtml(name)}"${imageChecked ? " checked" : ""}${includeFree && isFree ? " disabled" : ""}>图片解析</label>
+      </div>`;
+    }).join("");
+    updateDbArchiveSummary();
+  }
+
+  function updateDbArchiveSummary() {
+    if (!dbArchiveSummary) return;
+    const includeFree = dbArchiveDefaultFree?.checked !== false;
+    const effectiveRecord = new Set([...dbArchiveRecordNames, ...(includeFree ? dbArchiveFreeNames : [])]);
+    const effectiveImage = new Set([...dbArchiveImageNames, ...(includeFree ? dbArchiveFreeNames : [])]);
+    const enabled = dbArchiveEnabled?.checked !== false;
+    dbArchiveSummary.textContent = `${enabled ? "已启用" : "已关闭"} · 显式记录 ${dbArchiveRecordNames.size} 个 / 有效记录 ${effectiveRecord.size} 个 · 显式图片解析 ${dbArchiveImageNames.size} 个 / 有效图片解析 ${effectiveImage.size} 个 · 自由回复群 ${includeFree ? "自动纳入" : "不自动纳入"} · 未选群不会继续写聊天内容、保存图片或解析图片`;
+  }
+
+  function buildDbArchivePayload({ recordNames = null, imageNames = null } = {}) {
+    return {
+      enabled: dbArchiveEnabled?.checked !== false,
+      record_text: dbArchiveRecordText?.checked !== false,
+      record_media: dbArchiveRecordMedia?.checked !== false,
+      parse_images: dbArchiveParseImages?.checked !== false,
+      default_from_free_reply_groups: dbArchiveDefaultFree?.checked !== false,
+      record_group_names: normalizeUiStringArray(recordNames || [...dbArchiveRecordNames]),
+      parse_image_group_names: normalizeUiStringArray(imageNames || [...dbArchiveImageNames]),
+      long_message_chunk_size: Number(dbArchiveChunkSize?.value || 1800),
+      long_message_chunk_overlap: Number(dbArchiveChunkOverlap?.value || 160),
+    };
+  }
+
+  async function saveDbArchiveConfig({ syncFree = false } = {}) {
+    const nextRecordNames = syncFree ? [...new Set([...dbArchiveRecordNames, ...dbArchiveFreeNames])] : [...dbArchiveRecordNames];
+    const nextImageNames = syncFree ? [...new Set([...dbArchiveImageNames, ...dbArchiveFreeNames])] : [...dbArchiveImageNames];
+    const payload = buildDbArchivePayload({ recordNames: nextRecordNames, imageNames: nextImageNames });
+    try {
+      [dbArchiveSaveRecordBtn, dbArchiveSaveImageBtn, dbArchiveSyncFreeBtn].forEach(btn => { if (btn) btn.disabled = true; });
+      const data = await fetch(`${API}/settings/social/wechat-group-archive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).then(r => r.json());
+      if (!data.ok) throw new Error(data.error || "保存失败");
+      applyWechatGroupArchiveConfig(data.wechatGroupArchive || payload, data.wechatyDutyGroup || {});
+      showFeedback(dbFeedback, syncFree ? "已同步自由回复群到记录与图片解析范围" : "微信群记录范围已保存");
+      loadDbImageLibrary({ append: false, silent: true, autoProcess: true });
+    } catch (err) {
+      showFeedback(dbFeedback, err?.message || "保存失败", true);
+    } finally {
+      [dbArchiveSaveRecordBtn, dbArchiveSaveImageBtn, dbArchiveSyncFreeBtn].forEach(btn => { if (btn) btn.disabled = false; });
+    }
+  }
+
+  function renderDbIndexStatus(data = {}) {
+    if (!dbIndexGrid) return;
+    if (!data || data.ok === false) {
+      dbIndexGrid.innerHTML = `<div class="wechaty-empty">${escapeHtml(data?.error || "长期记忆索引状态读取失败")}</div>`;
+      return;
+    }
+    const cards = [
+      ["聊天记录 FTS", `${data.activity_fts_count || 0}/${data.activity_count || 0}`, `待补 ${data.pending_activity_fts || 0}`],
+      ["长消息 chunk", String(data.chunk_count || 0), `待切块 ${data.pending_long_message_chunks || 0} · 待 FTS ${data.pending_chunk_fts || 0}`],
+      ["本地消息 FTS", `${data.local_message_fts_count || 0}/${data.local_message_count || 0}`, `待补 ${data.pending_local_message_fts || 0}`],
+      ["本地记忆 FTS", `${data.local_memory_fts_count || 0}/${data.local_memory_count || 0}`, `待补 ${data.pending_local_memory_fts || 0}`],
+      ["Embedding", String((data.pending_message_embeddings || 0) + (data.pending_memory_embeddings || 0)), `消息 ${data.pending_message_embeddings || 0} · 记忆 ${data.pending_memory_embeddings || 0}`],
+      ["最近检索耗时", `${data.last_retrieval_ms || 0} ms`, `chunk ${data.chunk_size || 0}/${data.chunk_overlap || 0}`],
+    ];
+    dbIndexGrid.innerHTML = cards.map(([title, value, sub]) => `
+      <div class="db-index-card">
+        <small>${escapeHtml(title)}</small>
+        <b>${escapeHtml(value)}</b>
+        <span>${escapeHtml(sub)}</span>
+      </div>`).join("");
+  }
+
+  async function loadDbMemoryIndexStatus({ silent = false } = {}) {
+    try {
+      const data = await fetch(`${API}/social/wechat-groups/memory-index/status`).then(r => r.json());
+      renderDbIndexStatus(data);
+      return data;
+    } catch (err) {
+      if (!silent) showFeedback(dbFeedback, err?.message || "索引状态读取失败", true);
+      renderDbIndexStatus({ ok: false, error: "索引状态读取失败" });
+      return null;
+    }
+  }
+
+  async function backfillDbMemoryIndex() {
+    if (dbIndexBackfillBtn) dbIndexBackfillBtn.disabled = true;
+    try {
+      showFeedback(dbFeedback, "正在补齐长期记忆索引，请稍等…");
+      const data = await fetch(`${API}/social/wechat-groups/memory-index/backfill`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 5000 }),
+      }).then(r => r.json());
+      if (!data.ok) throw new Error(data.error || (data.errors && data.errors[0]) || "补齐失败");
+      renderDbIndexStatus({ ...(data.status?.archive || {}), ...(data.status?.local || {}), ...data.status, ok: true });
+      showFeedback(dbFeedback, `索引补齐完成：聊天记录 ${data.activity_fts || 0} 条，chunk ${data.chunks || 0} 条，本地消息 ${data.local_messages || 0} 条，本地记忆 ${data.local_memories || 0} 条`);
+      await loadDbMemoryIndexStatus({ silent: true });
+    } catch (err) {
+      showFeedback(dbFeedback, err?.message || "补齐失败", true);
+    } finally {
+      if (dbIndexBackfillBtn) dbIndexBackfillBtn.disabled = false;
+    }
+  }
+
   function renderDatabaseOverview(data = {}) {
     if (dbTotalSize) dbTotalSize.textContent = formatBytes(data.totals?.totalBytes || 0);
     if (dbPathHint) dbPathHint.textContent = data.paths?.userDir ? `本机目录：${data.paths.userDir}` : "本机数据库目录";
@@ -4425,12 +4651,27 @@ function initTTSSettings() {
       await loadWechatyKnownGroups({ silent: true });
       const [data] = await Promise.all([
         fetch(`${API}/settings/database`).then(r => r.json()),
+        loadDbArchiveSettings({ silent: true }),
+        loadDbMemoryIndexStatus({ silent: true }),
         loadDbImageLibrary({ silent: true, autoProcess: true }),
       ]);
       if (data.ok) renderDatabaseOverview(data);
       else showFeedback(dbFeedback, data.error || "数据库统计加载失败", true);
     } catch {
       showFeedback(dbFeedback, "数据库统计请求失败", true);
+    }
+  }
+
+  async function loadDbArchiveSettings({ silent = false } = {}) {
+    try {
+      const data = await fetch(`${API}/settings/social/wechat-group-archive`).then(r => r.json());
+      if (!data.ok) throw new Error(data.error || "记录范围读取失败");
+      applyWechatGroupArchiveConfig(data.wechatGroupArchive || {}, data.wechatyDutyGroup || {});
+      return data;
+    } catch (err) {
+      if (!silent) showFeedback(dbFeedback, err?.message || "记录范围读取失败", true);
+      if (dbArchiveGroupList) dbArchiveGroupList.innerHTML = '<div class="wechaty-empty">记录范围读取失败。</div>';
+      return null;
     }
   }
 
@@ -6221,6 +6462,28 @@ function initTTSSettings() {
   dbImportFile?.addEventListener("change", () => { importDatabaseBackup(dbImportFile.files?.[0]); dbImportFile.value = ""; });
   dbSearchBtn?.addEventListener("click", searchDatabaseMemory);
   dbSearchInput?.addEventListener("keydown", e => { if (e.key === "Enter") searchDatabaseMemory(); });
+  dbArchiveSearch?.addEventListener("input", renderDbArchiveGroups);
+  [dbArchiveEnabled, dbArchiveRecordText, dbArchiveRecordMedia, dbArchiveParseImages, dbArchiveDefaultFree, dbArchiveChunkSize, dbArchiveChunkOverlap].forEach(el => {
+    el?.addEventListener("change", () => {
+      updateDbArchiveSummary();
+      if (el === dbArchiveDefaultFree) renderDbArchiveGroups();
+    });
+  });
+  dbArchiveGroupList?.addEventListener("change", event => {
+    const input = event.target?.closest?.('input[data-archive-kind]');
+    if (!input) return;
+    const name = String(input.value || "").trim();
+    if (!name) return;
+    const targetSet = input.dataset.archiveKind === "image" ? dbArchiveImageNames : dbArchiveRecordNames;
+    if (input.checked) targetSet.add(name);
+    else targetSet.delete(name);
+    renderDbArchiveGroups();
+  });
+  dbArchiveSyncFreeBtn?.addEventListener("click", () => saveDbArchiveConfig({ syncFree: true }));
+  dbArchiveSaveRecordBtn?.addEventListener("click", () => saveDbArchiveConfig());
+  dbArchiveSaveImageBtn?.addEventListener("click", () => saveDbArchiveConfig());
+  dbIndexRefreshBtn?.addEventListener("click", () => loadDbMemoryIndexStatus());
+  dbIndexBackfillBtn?.addEventListener("click", backfillDbMemoryIndex);
   knowledgeImportToggle?.addEventListener("click", () => { if (knowledgeDrawer) knowledgeDrawer.hidden = !knowledgeDrawer.hidden; });
   knowledgeDrawerClose?.addEventListener("click", () => { if (knowledgeDrawer) knowledgeDrawer.hidden = true; });
   knowledgeRefreshBtn?.addEventListener("click", loadKnowledgeConsole);

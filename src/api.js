@@ -11,7 +11,7 @@ import { getQuotaStatus } from './quota.js'
 import { isRunning, stopLoop, startLoop } from './control.js'
 import { buildHeartbeatSystemPromptPreview } from './system-prompt-preview.js'
 import { paths } from './paths.js'
-import { config, activate as activateLLM, getActivationStatus, switchModel, setTemperature, getMinimaxKey, setMinimaxKey, getSocialConfig, setSocialConfig, getHonchoConfig, setHonchoConfig, getWechatyDutyGroupConfig, setWechatyDutyGroupConfig, getWeChatGroupDigestConfig, setWeChatGroupDigestConfig, WECHATY_PERSONA_PRESETS, getVoiceConfig, setVoiceConfig, getTTSConfig, setTTSConfig, getTTSCredentials, getProviderSummaries, getSecurity, setSecurity, getEmbeddingConfig, setEmbeddingConfig, EMBEDDING_PROVIDER_PRESETS, getWebSearchConfig, setWebSearchConfig, upsertLLMProfile, deleteLLMProfile, selectLLMProfile, testLLMProfileConnection, setLLMFailoverConfig, getLLMConnectivityMonitorConfig, setLLMConnectivityMonitorConfig, getWechatMemeConfig, setWechatMemeConfig, getSkillsConfig, setSkillImageConfig, setSkillImageVisionConfig, setSkillVideoAnalysisConfig, testSkillModelChannel, listSkillModelChannelModels } from './config.js'
+import { config, activate as activateLLM, getActivationStatus, switchModel, setTemperature, getMinimaxKey, setMinimaxKey, getSocialConfig, setSocialConfig, getHonchoConfig, setHonchoConfig, getWechatyDutyGroupConfig, setWechatyDutyGroupConfig, getWeChatGroupArchiveConfig, setWeChatGroupArchiveConfig, getWeChatGroupDigestConfig, setWeChatGroupDigestConfig, WECHATY_PERSONA_PRESETS, getVoiceConfig, setVoiceConfig, getTTSConfig, setTTSConfig, getTTSCredentials, getProviderSummaries, getSecurity, setSecurity, getEmbeddingConfig, setEmbeddingConfig, EMBEDDING_PROVIDER_PRESETS, getWebSearchConfig, setWebSearchConfig, upsertLLMProfile, deleteLLMProfile, selectLLMProfile, testLLMProfileConnection, setLLMFailoverConfig, getLLMConnectivityMonitorConfig, setLLMConnectivityMonitorConfig, getWechatMemeConfig, setWechatMemeConfig, getSkillsConfig, setSkillImageConfig, setSkillImageVisionConfig, setSkillVideoAnalysisConfig, testSkillModelChannel, listSkillModelChannelModels } from './config.js'
 import { getHotspotAlertConfig, setHotspotAlertConfig } from './config.js'
 import { streamTTS, TTS_PROVIDERS, TTS_VOICES } from './voice/tts-providers.js'
 import { getVoiceStatus, startVoiceServer, stopVoiceServer, restartVoiceServer } from './voice/manager.js'
@@ -23,9 +23,9 @@ import { handleSocialWebhook, isSocialWebhookPath } from './social/webhooks.js'
 import { getClawbotQR, logoutClawbot } from './social/wechat-clawbot.js'
 import { configureWechatyDutyGroup, forceReloginWechatyDutyGroupConnector, getWechatyDutyGroupStatus, listWechatyDutyGroupRooms, refreshWechatyDutyGroupMemberNames, restartWechatyDutyGroupConnector, sendWechatyOfflineQrNotifyNow, startWechatyDutyGroupConnector, stopWechatyDutyGroupConnector, syncWechatyDutyGroupRooms, testWechatyNativeMention } from './social/wechaty-duty-group.js'
 import { buildWeChatGroupSummary, getRecentWeChatGroupMessages, listRecentWeChatGroups, makeWeChatGroupExternalId, WECHAT_GROUP_CHANNEL } from './social/wechat-groups.js'
-import { createWeChatGroupManualMemory, deleteWeChatGroupMemory, deleteWeChatMemberPermanentMemory, getWeChatGroupMemoryStatus, listWeChatGroupMemory, listWeChatGroupMemoryOverview, listWeChatMemberPermanentMemory, syncLocalWeChatMessagesToHoncho, backfillWeChatExplicitMemoriesFromMessages, updateWeChatMemberPermanentMemory } from './social/wechat-group-memory.js'
+import { createWeChatGroupManualMemory, deleteWeChatGroupMemory, deleteWeChatMemberPermanentMemory, getLocalWeChatMemoryIndexStatus, getWeChatGroupMemoryStatus, listWeChatGroupMemory, listWeChatGroupMemoryOverview, listWeChatMemberPermanentMemory, syncLocalWeChatMessagesToHoncho, backfillLocalWeChatMemoryIndex, backfillWeChatExplicitMemoriesFromMessages, updateWeChatMemberPermanentMemory } from './social/wechat-group-memory.js'
 import { getWeChatCommandGuardRules } from './social/wechat-command-guard.js'
-import { buildWeChatGroupActivityExport, getWeChatGroupStats, importWeChatGroupActivityRecords, listKnownWeChatGroups, listWeChatGroupActivityRecords, listWeChatGroupMembers, resolveWeChatGroupMediaFile } from './social/wechat-group-stats.js'
+import { backfillWeChatGroupMemoryIndex, buildWeChatGroupActivityExport, getWeChatGroupMemoryIndexStatus, getWeChatGroupStats, importWeChatGroupActivityRecords, listKnownWeChatGroups, listWeChatGroupActivityRecords, listWeChatGroupMembers, resolveWeChatGroupMediaFile } from './social/wechat-group-stats.js'
 import { searchMemes } from './social/meme-search.js'
 import { deleteWeChatImageMediaItem, getWeChatImageVisionStatus, listWeChatImageMediaItems, startWeChatImageBackgroundDescribe, updateWeChatImageMediaItem } from './social/wechat-image-vision.js'
 import { getWeChatVideoAnalysisStatus } from './social/wechat-video-analysis-skill.js'
@@ -703,6 +703,72 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         type: url.searchParams.get('type') || '',
       })
       return jsonResponse(res, result.ok ? 200 : 400, result)
+    }
+
+    // GET /social/wechat-groups/memory-index/status — 长期记忆索引状态：FTS、长消息 chunk、待补索引数量。
+    if (req.method === 'GET' && url.pathname === '/social/wechat-groups/memory-index/status') {
+      if (!hasAllowedAccess(req, url)) return jsonResponse(res, 403, { ok: false, error: 'forbidden' })
+      const archive = getWeChatGroupMemoryIndexStatus()
+      const local = getLocalWeChatMemoryIndexStatus()
+      return jsonResponse(res, 200, {
+        ok: archive.ok !== false && local.ok !== false,
+        archive,
+        local,
+        fts_available: archive.fts_available !== false,
+        activity_count: archive.activity_count || 0,
+        activity_fts_count: archive.activity_fts_count || 0,
+        chunk_count: archive.chunk_count || 0,
+        chunk_fts_count: archive.chunk_fts_count || 0,
+        local_message_count: local.message_count || 0,
+        local_message_fts_count: local.message_fts_count || 0,
+        local_memory_count: local.memory_count || 0,
+        local_memory_fts_count: local.memory_fts_count || 0,
+        pending_activity_fts: archive.pending_activity_fts || 0,
+        pending_chunk_fts: archive.pending_chunk_fts || 0,
+        pending_raw_text_full: archive.pending_raw_text_full || 0,
+        pending_long_message_chunks: archive.pending_long_message_chunks || 0,
+        pending_local_message_fts: local.pending_message_fts || 0,
+        pending_local_memory_fts: local.pending_memory_fts || 0,
+        pending_message_embeddings: local.pending_message_embeddings || 0,
+        pending_memory_embeddings: local.pending_memory_embeddings || 0,
+        chunk_size: archive.chunk_size || 0,
+        chunk_overlap: archive.chunk_overlap || 0,
+        last_retrieval_ms: archive.last_retrieval_ms || 0,
+        db_path: archive.db_path || '',
+      })
+    }
+
+    // POST /social/wechat-groups/memory-index/backfill — 补齐聊天记录 FTS/chunk 索引；不做合并转发聊天补档。
+    if (req.method === 'POST' && url.pathname === '/social/wechat-groups/memory-index/backfill') {
+      if (!requireLocalOrToken(req, res, url)) return
+      try {
+        const body = await readJsonBody(req).catch(() => ({}))
+        const archive = backfillWeChatGroupMemoryIndex({
+          limit: body.limit || url.searchParams.get('limit') || 5000,
+        })
+        const local = backfillLocalWeChatMemoryIndex({
+          limit: body.limit || url.searchParams.get('limit') || 5000,
+        })
+        const result = {
+          ok: archive.ok !== false && local.ok !== false,
+          archive,
+          local,
+          scanned: archive.scanned || 0,
+          activity_fts: archive.activity_fts || 0,
+          chunks: archive.chunks || 0,
+          raw_text_full_updated: archive.raw_text_full_updated || 0,
+          local_messages: local.messages || 0,
+          local_memories: local.memories || 0,
+          errors: [...(archive.errors || []), ...(local.errors || [])],
+          status: {
+            archive: archive.status,
+            local: local.status,
+          },
+        }
+        return jsonResponse(res, result.ok ? 200 : 400, result)
+      } catch (err) {
+        return jsonResponse(res, 400, { ok: false, error: err.message })
+      }
     }
 
     // GET /social/wechat-groups/records/media?path=data/wechat-media/...
@@ -1754,7 +1820,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
 
     // GET /settings/social — read per-platform configuration status (plaintext keys not returned)
     if (req.method === 'GET' && url.pathname === '/settings/social') {
-      jsonResponse(res, 200, { ok: true, social: getSocialConfig(), wechatyDutyGroup: getWechatyDutyGroupConfig(), wechatyDutyGroupStatus: getWechatyDutyGroupStatus(), wechatyPersonaPresets: WECHATY_PERSONA_PRESETS, honcho: getHonchoConfig(), honchoStatus: getWeChatGroupMemoryStatus(), wechatGroupDigest: getWeChatGroupDigestConfig(), wechatMeme: getWechatMemeConfig(), guardRules: getWeChatCommandGuardRules() })
+      jsonResponse(res, 200, { ok: true, social: getSocialConfig(), wechatyDutyGroup: getWechatyDutyGroupConfig(), wechatyDutyGroupStatus: getWechatyDutyGroupStatus(), wechatyPersonaPresets: WECHATY_PERSONA_PRESETS, honcho: getHonchoConfig(), honchoStatus: getWeChatGroupMemoryStatus(), wechatGroupArchive: getWeChatGroupArchiveConfig(), wechatGroupDigest: getWeChatGroupDigestConfig(), wechatMeme: getWechatMemeConfig(), guardRules: getWeChatCommandGuardRules() })
       return
     }
 
@@ -1826,6 +1892,24 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         jsonResponse(res, 200, { ok: true, digest })
       }).catch(err => jsonResponse(res, 400, { ok: false, error: err.message }))
       return
+    }
+
+    // GET /settings/social/wechat-group-archive — 读取微信群聊天记录与图片解析范围配置
+    if (req.method === 'GET' && url.pathname === '/settings/social/wechat-group-archive') {
+      if (!hasAllowedAccess(req, url)) return jsonResponse(res, 403, { ok: false, error: 'forbidden' })
+      return jsonResponse(res, 200, { ok: true, wechatGroupArchive: getWeChatGroupArchiveConfig(), wechatyDutyGroup: getWechatyDutyGroupConfig(), status: getWechatyDutyGroupStatus() })
+    }
+
+    // POST /settings/social/wechat-group-archive — 保存微信群聊天记录与图片解析范围配置
+    if (req.method === 'POST' && url.pathname === '/settings/social/wechat-group-archive') {
+      if (!requireLocalOrToken(req, res, url)) return
+      try {
+        const body = await readJsonBody(req)
+        const cfg = setWeChatGroupArchiveConfig(body || {})
+        return jsonResponse(res, 200, { ok: true, wechatGroupArchive: cfg, wechatyDutyGroup: getWechatyDutyGroupConfig(), status: getWechatyDutyGroupStatus() })
+      } catch (err) {
+        return jsonResponse(res, 400, { ok: false, error: err.message })
+      }
     }
 
     // POST /settings/social/wechaty-duty-group — 保存微信群助手开关和多选群组，并按需热重启
