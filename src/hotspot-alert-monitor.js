@@ -335,6 +335,10 @@ export function getHotspotAlertStatus() {
 
 export function startHotspotAlertScheduler() {
   const cfg = getHotspotAlertConfig()
+  if (!cfg.enabled) {
+    stopHotspotAlertScheduler()
+    return { ok: true, skipped: true, reason: 'hotspot_alert_disabled', status: getHotspotAlertStatus() }
+  }
   const intervalMinutes = Math.max(Number(cfg.intervalMinutes || 10), 5)
   startupPeriodKey = intervalPeriodKey(intervalMinutes, new Date())
   suppressAutoNotifyUntil = Date.now() + intervalMinutes * 60 * 1000

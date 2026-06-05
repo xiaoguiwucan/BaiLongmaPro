@@ -33,7 +33,7 @@ import { getWeChatVideoAnalysisStatus } from './social/wechat-video-analysis-ski
 import { sendWeChatGroupDigestNow } from './social/wechat-group-digest.js'
 import { WECHAT_GROUP_REPORT_TEMPLATES, normalizeWeChatGroupReportTemplate, renderWeChatGroupStatsPosterHtml } from './social/wechat-group-report-template.js'
 import { getLLMConnectivityMonitorStatus, runLLMConnectivityMonitorCheck, startLLMConnectivityMonitorScheduler } from './llm-connectivity-monitor.js'
-import { getHotspotAlertStatus, runHotspotAlertCheck, startHotspotAlertScheduler } from './hotspot-alert-monitor.js'
+import { getHotspotAlertStatus, runHotspotAlertCheck, startHotspotAlertScheduler, stopHotspotAlertScheduler } from './hotspot-alert-monitor.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
 import { getHotspots, setHotspotPanelState, getHotspotPanelState } from './hotspots.js'
 import { getPersonCard, setPersonCardPanelState, getPersonCardPanelState } from './person-cards.js'
@@ -1757,7 +1757,8 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       try {
         const body = await readJsonBody(req)
         const cfg = setHotspotAlertConfig(body || {})
-        startHotspotAlertScheduler()
+        if (cfg.enabled) startHotspotAlertScheduler()
+        else stopHotspotAlertScheduler()
         return jsonResponse(res, 200, {
           ok: true,
           config: cfg,

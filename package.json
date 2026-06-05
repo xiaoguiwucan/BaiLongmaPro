@@ -40,7 +40,8 @@
     "test:wechat-file-image-memory": "node scripts/run-electron-node.mjs scripts/test-wechat-file-image-memory.mjs",
     "test:wechat-video-analysis": "node scripts/run-electron-node.mjs scripts/test-wechat-video-analysis.mjs",
     "test:wechat-member-memory-tool": "node scripts/run-electron-node.mjs scripts/test-wechat-member-memory-tool.mjs",
-    "test:wechaty-offline-qr-notify": "node scripts/test-wechaty-offline-qr-notify.mjs"
+    "test:wechaty-offline-qr-notify": "node scripts/test-wechaty-offline-qr-notify.mjs",
+    "test:hotspot-alert-toggle": "node scripts/test-hotspot-alert-toggle.mjs"
   },
   "dependencies": {
     "@honcho-ai/sdk": "^2.1.2",
