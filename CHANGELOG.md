@@ -7,11 +7,13 @@
 ### 修复
 - 解决 GitHub issue #6：默认源码启动改为 LAN 模式，`npm start` 和 `npm run start:backend` 现在与 LAN 别名统一走跨平台启动器，默认设置 `BAILONGMA_HOST=0.0.0.0` 与 `BAILONGMA_ALLOW_LAN=1`。
 - 新增 `scripts/start-lan.mjs`，启动时会枚举本机私有 IPv4 地址并打印 `http://<局域网 IP>:3721/brain-ui`，便于同一局域网设备直接访问。
+- 修复 Release workflow 中 Windows 与 macOS 矩阵并发发布同一 tag 时抢建同一个 GitHub Release，导致 macOS 发布阶段出现 `already_exists field=tag_name` 422 错误的问题；发布矩阵现在串行执行，保留单平台手动补发能力。
 
 ### 验证
 - 通过 `node --check scripts/start-lan.mjs`。
 - 通过 `node --check src/api.js`。
 - 通过 `node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"`。
+- 通过 PowerShell 检查 `.github/workflows/release.yml` 包含 `max-parallel: 1`。
 - 通过 `git diff --check`。
 
 ### 部署/备份注意事项
